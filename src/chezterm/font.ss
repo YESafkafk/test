@@ -199,24 +199,33 @@
                 regular
                 (fallback-face f cp))))))
 
+  ;; Code points usually shown as (color) emoji.
+  (define (emoji? cp)
+    (or (fx<= #x1F300 cp #x1FAFF) (fx<= #x1F000 cp #x1F2FF) (fx<= #x2600 cp #x27BF)
+        (fx<= #x1FC00 cp #x1FFFF)))
+
   (define (fallback-face f cp)
     (let ([cache (font-fallback-cache f)])
       (if (hashtable-contains? cache cp)
           (hashtable-ref cache cp #f)
-          (let ([face (or (find (lambda (fc) (not (= 0 (face-char-index fc cp)))) (font-fallbacks f))
-                          (let ([m (fc-match (font-family f) FC_WEIGHT_REGULAR FC_SLANT_ROMAN
-                                             (font-pixel-size f) cp)])
-                            (and m
-                                 (let* ([key (list (car m) (cadr m) #f #f)]
-                                        [face (or (hashtable-ref (font-face-files f) key #f)
-                                                  (let ([nf (open-face (car m) (cadr m) (font-pixel-size f) #f #f)])
-                                                    (when nf
-                                                      (hashtable-set! (font-face-files f) key nf)
-                                                      (font-fallbacks-set! f (append (font-fallbacks f) (list nf))))
-                                                    nf))])
-                                   (and face (not (= 0 (face-char-index face cp))) face)))))])
+          (let ([face (or (and (emoji? cp) (match-face f "emoji" cp))
+                          (find (lambda (fc) (not (= 0 (face-char-index fc cp)))) (font-fallbacks f))
+                          (match-face f (font-family f) cp))])
             (hashtable-set! cache cp face)
             face))))
+
+  ;; Ask fontconfig for a FAMILY font covering CP; #f if the result lacks it.
+  (define (match-face f family cp)
+    (let ([m (fc-match family FC_WEIGHT_REGULAR FC_SLANT_ROMAN (font-pixel-size f) cp)])
+      (and m
+           (let* ([key (list (car m) (cadr m) #f #f)]
+                  [face (or (hashtable-ref (font-face-files f) key #f)
+                            (let ([nf (open-face (car m) (cadr m) (font-pixel-size f) #f #f)])
+                              (when nf
+                                (hashtable-set! (font-face-files f) key nf)
+                                (font-fallbacks-set! f (append (font-fallbacks f) (list nf))))
+                              nf))])
+             (and face (not (= 0 (face-char-index face cp))) face)))))
 
   ;;; Rasterization --------------------------------------------------------------
 
