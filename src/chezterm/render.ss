@@ -8,7 +8,7 @@
   (export make-renderer renderer? renderer-resize! renderer-render!
           renderer-pixels renderer-width renderer-height renderer-stride
           renderer-invalidate! renderer-set-font! renderer-font
-          renderer-cols renderer-rows renderer-set-padding!)
+          renderer-cols renderer-rows renderer-set-padding! renderer-free!)
   (import (chezscheme) (chezterm ffi) (chezterm grid) (chezterm terminal) (chezterm font))
 
   (define-record-type renderer
@@ -49,6 +49,10 @@
     (renderer-pad-x-set! r x)
     (renderer-pad-y-set! r y)
     (renderer-invalidate! r))
+
+  (define (renderer-free! r)
+    (unless (eqv? 0 (renderer-pixels r)) (free (renderer-pixels r)))
+    (renderer-pixels-set! r 0))
 
   (define (renderer-resize! r width height)
     (unless (and (fx= width (renderer-width r)) (fx= height (renderer-height r)))

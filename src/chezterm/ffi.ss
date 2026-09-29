@@ -13,15 +13,16 @@
    strerror c-read c-write close pipe2 fcntl poll ioctl dup2
    mmap munmap ftruncate memfd_create fork setsid forkpty
    execvp _exit waitpid kill getpid chdir readlink
-   timerfd_create timerfd_settime sigemptyset sigprocmask
-   signal wl_display_connect wl_display_disconnect
-   wl_display_get_fd wl_display_dispatch
-   wl_display_dispatch_pending wl_display_flush
-   wl_display_roundtrip wl_display_prepare_read
-   wl_display_read_events wl_display_cancel_read
-   wl_display_get_error wl_proxy_marshal_array_flags
-   wl_proxy_add_dispatcher wl_proxy_get_id wl_proxy_get_version
-   wl_proxy_destroy wl_proxy_get_class wl_cursor_theme_load
+   timerfd_create timerfd_settime inotify_init1
+   inotify_add_watch sigemptyset sigprocmask signal
+   wl_display_connect wl_display_disconnect wl_display_get_fd
+   wl_display_dispatch wl_display_dispatch_pending
+   wl_display_flush wl_display_roundtrip
+   wl_display_prepare_read wl_display_read_events
+   wl_display_cancel_read wl_display_get_error
+   wl_proxy_marshal_array_flags wl_proxy_add_dispatcher
+   wl_proxy_get_id wl_proxy_get_version wl_proxy_destroy
+   wl_proxy_get_class wl_cursor_theme_load
    wl_cursor_theme_destroy wl_cursor_theme_get_cursor
    wl_cursor_image_get_buffer xkb_context_new xkb_context_unref
    xkb_keymap_new_from_string xkb_keymap_unref
@@ -81,12 +82,13 @@
    FT_LOAD_FORCE_AUTOHINT FT_LOAD_NO_BITMAP FT_LOAD_NO_HINTING
    FT_LOAD_RENDER FT_LOAD_TARGET_LCD FT_LOAD_TARGET_LIGHT
    FT_LOAD_TARGET_MONO FT_LOAD_TARGET_NORMAL F_GETFL F_SETFD
-   F_SETFL FcFalse FcTrue LC_ALL LC_CTYPE MAP_SHARED
-   MFD_ALLOW_SEALING MFD_CLOEXEC O_CLOEXEC O_NONBLOCK POLLERR
-   POLLHUP POLLIN POLLNVAL POLLOUT PROT_READ PROT_WRITE SIGCHLD
-   SIGHUP SIGINT SIGPIPE SIGTERM SIG_SETMASK TFD_CLOEXEC
-   TFD_NONBLOCK TIOCGPGRP TIOCSWINSZ WL_MARSHAL_FLAG_DESTROY
-   WNOHANG)
+   F_SETFL FcFalse FcTrue IN_CLOEXEC IN_CLOSE_WRITE IN_CREATE
+   IN_DELETE_SELF IN_MOVED_TO IN_NONBLOCK LC_ALL LC_CTYPE
+   MAP_SHARED MFD_ALLOW_SEALING MFD_CLOEXEC O_CLOEXEC
+   O_NONBLOCK POLLERR POLLHUP POLLIN POLLNVAL POLLOUT PROT_READ
+   PROT_WRITE SIGCHLD SIGHUP SIGINT SIGPIPE SIGTERM SIG_SETMASK
+   TFD_CLOEXEC TFD_NONBLOCK TIOCGPGRP TIOCSWINSZ
+   WL_MARSHAL_FLAG_DESTROY WNOHANG)
   (import (chezscheme))
   (define shared-objects-loaded
     (begin
@@ -361,6 +363,12 @@
   (define timerfd_settime
     (foreign-procedure "timerfd_settime"
       (int int uptr uptr)
+      int))
+  (define inotify_init1
+    (foreign-procedure "inotify_init1" (int) int))
+  (define inotify_add_watch
+    (foreign-procedure "inotify_add_watch"
+      (int utf-8 unsigned-int)
       int))
   (define sigemptyset
     (foreign-procedure "sigemptyset" (uptr) int))
@@ -731,6 +739,12 @@
   (define F_SETFL 4)
   (define FcFalse 0)
   (define FcTrue 1)
+  (define IN_CLOEXEC 524288)
+  (define IN_CLOSE_WRITE 8)
+  (define IN_CREATE 256)
+  (define IN_DELETE_SELF 1024)
+  (define IN_MOVED_TO 128)
+  (define IN_NONBLOCK 2048)
   (define LC_ALL 6)
   (define LC_CTYPE 0)
   (define MAP_SHARED 1)

@@ -22,7 +22,7 @@
           terminal-abs-row terminal-rel-row
           terminal-set-callbacks! terminal-reset! terminal-clear-history!
           terminal-cwd terminal-dirty? terminal-dirty-set!
-          terminal-set-cell-pixel-size!
+          terminal-set-cell-pixel-size! terminal-set-defaults!
           color->rgb make-default-palette)
   (import (chezscheme) (chezterm grid) (chezterm charwidth))
 
@@ -127,6 +127,17 @@
     (terminal-on-title-set! t on-title)
     (terminal-on-bell-set! t on-bell)
     (terminal-on-clipboard-set! t on-clipboard))
+
+  ;; Apply new defaults from a configuration reload: palette and cursor.
+  ;; Colors changed by the application (OSC 4/10/11/12) are reset.
+  (define (terminal-set-defaults! t palette cursor-style cursor-blink)
+    (terminal-default-palette-set! t palette)
+    (terminal-palette-set! t (vector-copy palette))
+    (terminal-default-cursor-style-set! t cursor-style)
+    (terminal-default-cursor-blink-set! t cursor-blink)
+    (terminal-cursor-style-set! t cursor-style)
+    (terminal-cursor-blink-set! t cursor-blink)
+    (terminal-dirty-set! t #t))
 
   (define (terminal-set-cell-pixel-size! t w h)
     (terminal-cell-width-set! t w)

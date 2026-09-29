@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/timerfd.h>
+#include <sys/inotify.h>
 
 #include <wayland-client-core.h>
 #include <wayland-cursor.h>

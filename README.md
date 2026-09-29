@@ -46,7 +46,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - `wp_cursor_shape_v1` pointer cursors, with an XCursor theme fallback.
 - Keyboard handling through xkbcommon, including compose/dead keys, key repeat,
   application cursor/keypad modes and xterm-style modifier encoding.
-- Configurable key bindings, colors, padding, cursor and more.
+- Configurable key bindings, colors, padding, cursor and more, with **live
+  reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
 - Incremental software rendering into shared-memory buffers: only changed
   rows are redrawn, scrolling moves pixels instead of redrawing, and only
@@ -187,6 +188,6 @@ The escape sequence parser, grid and renderer are compiled with Chez's
 - No client-side decorations: without `xdg-decoration` (e.g. on GNOME) the
   window has no title bar.
 - Fractional scaling is rounded to the next integer scale.
-- No Alacritty vi mode, hints UI, IME (`text-input-v3`), kitty keyboard
-  protocol or live config reload.
+- No Alacritty vi mode, hints UI, IME (`text-input-v3`) or kitty keyboard
+  protocol.
 - `TERM` defaults to `xterm-256color`; no custom terminfo entry is shipped.

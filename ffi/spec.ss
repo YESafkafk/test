@@ -29,7 +29,7 @@
   mmap munmap ftruncate memfd_create
   fork setsid (forkpty (__name uptr)) (execvp (__file uptr)) _exit waitpid kill getpid
   (chdir (__path uptr)) (readlink (__buf uptr))
-  timerfd_create timerfd_settime
+  timerfd_create timerfd_settime inotify_init1 inotify_add_watch
   sigemptyset sigprocmask signal
 
   ;; wayland-client core
@@ -94,6 +94,7 @@
   TIOCSWINSZ TIOCGPGRP WNOHANG SIGCHLD SIGHUP SIGPIPE SIGINT SIGTERM
   SIG_SETMASK LC_ALL LC_CTYPE
   CLOCK_MONOTONIC TFD_NONBLOCK TFD_CLOEXEC ENOENT EPIPE
+  IN_NONBLOCK IN_CLOEXEC IN_CLOSE_WRITE IN_MOVED_TO IN_CREATE IN_DELETE_SELF
   ;; wayland
   WL_MARSHAL_FLAG_DESTROY
   ;; freetype

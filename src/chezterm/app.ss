@@ -63,6 +63,10 @@
   (define search-query "")
   (define search-match #f)        ; #(abs c0 c1)
 
+  ;; live configuration reload
+  (define config-file #f)
+  (define config-watch-fd #f)
+
   ;; testing aid
   (define dump-frame #f)          ; (path . delay-ms)
   (define start-time 0)
@@ -107,6 +111,72 @@
   (define (make-font-at size s)
     (make-font (config-ref 'font-family) size (inexact (config-ref 'dpi)) s
                (config-ref 'font-bold-family) (config-ref 'font-italic-family)))
+
+  (define (create-renderer f)
+    (make-renderer f pad-x pad-y (config-ref 'opacity)
+                   (config-ref 'bold-is-bright)
+                   (color-option 'selection-foreground)
+                   (or (color-option 'selection-background) #x4f4f4f)
+                   (config-ref 'cursor-unfocused-hollow)))
+
+  (define (read-padding!)
+    (let ([padding (config-ref 'padding)])
+      (set! pad-x (car padding))
+      (set! pad-y (if (pair? (cdr padding)) (cadr padding) (car padding)))))
+
+  ;;; Live configuration reload ------------------------------------------------------
+
+  (define (watch-config!)
+    (when config-file
+      (let ([dir (path-parent config-file)])
+        (when (and (not (string=? dir "")) (file-directory? dir))
+          (let ([fd (inotify_init1 (logor IN_NONBLOCK IN_CLOEXEC))])
+            (when (>= fd 0)
+              (if (>= (inotify_add_watch fd dir (logor IN_CLOSE_WRITE IN_MOVED_TO IN_CREATE)) 0)
+                  (set! config-watch-fd fd)
+                  (close fd))))))))
+
+  (define inotify-buf (make-bytevector 4096))
+
+  ;; Drain inotify events; reload when one names the configuration file.
+  (define (config-watch-ready!)
+    (let ([name (path-last config-file)])
+      (let loop ([hit #f])
+        (let ([n (c-read config-watch-fd inotify-buf (bytevector-length inotify-buf))])
+          (if (> n 0)
+              ;; struct inotify_event { int wd; u32 mask, cookie, len; char name[]; }
+              (loop (let scan ([off 0] [hit hit])
+                      (if (>= off n)
+                          hit
+                          (let* ([len (bytevector-u32-native-ref inotify-buf (+ off 12))]
+                                 [ev-name (let ([bv (make-bytevector len)])
+                                            (bytevector-copy! inotify-buf (+ off 16) bv 0 len)
+                                            (let ([s (utf8->string bv)])
+                                              ;; strip NUL padding
+                                              (let trim ([k 0])
+                                                (if (and (< k (string-length s))
+                                                         (not (char=? (string-ref s k) #\nul)))
+                                                    (trim (+ k 1))
+                                                    (substring s 0 k)))))])
+                            (scan (+ off 16 len) (or hit (string=? ev-name name)))))))
+              (when hit
+                (guard (e [#t (let ([p (current-error-port)])
+                                (display "chezterm: reloading the configuration failed: " p)
+                                (display-condition e p)
+                                (newline p))])
+                  (reload-config!))))))))
+
+  (define (reload-config!)
+    (warn "reloading ~a" config-file)
+    (load-config config-file)
+    (load-bindings!)
+    (terminal-set-defaults! term (build-palette) (config-ref 'cursor-style) (config-ref 'cursor-blink))
+    (read-padding!)
+    (renderer-free! renderer)
+    (set! renderer (create-renderer font))
+    (set-font! (inexact (config-ref 'font-size)) scale)
+    (unless (config-ref 'dynamic-title) (window-set-title! win (config-ref 'title)))
+    (set! need-redraw #t))
 
   ;;; PTY I/O ------------------------------------------------------------------------
 
@@ -663,7 +733,8 @@
                 (when pty-active
                   (set-pollfd! 1 pty-fd (logor POLLIN (if (pair? write-queue) POLLOUT 0)))
                   (set! n 2))
-                (let ([first-extra n])
+                (let ([first-extra n]
+                      [extra (if config-watch-fd (cons config-watch-fd extra) extra)])
                   (for-each (lambda (fd) (set-pollfd! n fd POLLIN) (set! n (+ n 1))) extra)
                   (let ([r (poll pollfds n (compute-timeout (now-ms)))])
                     (if (and (> r 0) (logtest (pollfd-revents 0) (logor POLLIN POLLERR POLLHUP)))
@@ -678,7 +749,10 @@
                     (when (> r 0)
                       (let floop ([fds extra] [i first-extra])
                         (unless (null? fds)
-                          (unless (= 0 (pollfd-revents i)) (window-fd-ready! win (car fds)))
+                          (unless (= 0 (pollfd-revents i))
+                            (if (eqv? (car fds) config-watch-fd)
+                                (config-watch-ready!)
+                                (window-fd-ready! win (car fds))))
                           (floop (cdr fds) (+ i 1)))))
                     (handle-timers! (now-ms))
                     (when dump-frame (check-dump-frame!))
@@ -761,7 +835,8 @@ Options:
   (define (run args)
     (let* ([opts (parse-args args)]
            [opt (lambda (k) (let ([e (assq k opts)]) (and e (cdr e))))])
-      (load-config (or (opt 'config) (config-path)))
+      (set! config-file (or (opt 'config) (config-path)))
+      (load-config config-file)
       (apply-option-overrides! opts)
       (when (pair? overrides) (install-overrides!))
       (init-charwidth!)
@@ -777,9 +852,7 @@ Options:
                              (cons d 500)))])
             (set! dump-frame parts))))
       (set! font-size (inexact (config-ref 'font-size)))
-      (let ([padding (config-ref 'padding)])
-        (set! pad-x (car padding))
-        (set! pad-y (if (pair? (cdr padding)) (cadr padding) (car padding))))
+      (read-padding!)
       (set! font (make-font-at font-size 1))
       (let* ([cols (config-ref 'columns)] [rows (config-ref 'lines)]
              [palette (build-palette)])
@@ -788,11 +861,7 @@ Options:
         (set! term (make-terminal rows cols (config-ref 'scrollback) palette
                                   (config-ref 'cursor-style) (config-ref 'cursor-blink)))
         (terminal-set-cell-pixel-size! term (font-cell-width font) (font-cell-height font))
-        (set! renderer (make-renderer font pad-x pad-y (config-ref 'opacity)
-                                      (config-ref 'bold-is-bright)
-                                      (color-option 'selection-foreground)
-                                      (or (color-option 'selection-background) #x4f4f4f)
-                                      (config-ref 'cursor-unfocused-hollow)))
+        (set! renderer (create-renderer font))
         (set! win (open-window on-window-event (or (opt 'title) (config-ref 'title))
                                (or (opt 'app-id) (config-ref 'app-id))
                                logical-width logical-height (config-ref 'decorations)))
@@ -830,6 +899,7 @@ Options:
                                   (display-condition e p)
                                   (newline p))
                                 #f])
+                    (watch-config!)
                     (main-loop!)
                     #t)])
           (when (and pty-fd (not child-exited)) (pty-hangup! pty-fd child-pid))
