@@ -57,7 +57,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 
 ## Requirements
 
-- Chez Scheme 9.5 or newer (`scheme`)
+- Chez Scheme 9.5 or newer (`scheme`; tested with 9.5.8 and 10.4)
 - libwayland-client, libwayland-cursor, libxkbcommon, FreeType, fontconfig
   (runtime libraries)
 - A Wayland compositor
@@ -81,17 +81,12 @@ build/chezterm
 make install    # PREFIX=/usr/local by default
 make test       # headless test suite (terminal, selection, keys, renderer),
                 # run against the sources and against the optimized build
+make check-generated  # regenerate bindings and protocols, diff with the committed files
 ```
 
-With Nix (flakes):
-
-```sh
-nix run             # build and run chezterm
-nix build           # package in ./result
-nix flake check     # build, test suite, formatting
-nix fmt             # format the Nix files
-nix develop         # shell with Chez, the libraries and c2ffi (for `make bindings`)
-```
+Make variables: `SCHEME` (the Chez Scheme executable), `C2FFI` and
+`C2FFI_FLAGS` (for `make bindings`), `SHARED_OBJECTS` (see [Nix](#nix)) and
+`RUNTIME_PATH` (directories the launcher appends to `PATH`).
 
 ```
 Usage: chezterm [options] [-e command [args...]]
@@ -104,6 +99,58 @@ Usage: chezterm [options] [-e command [args...]]
       --hold                 keep the window open after the command exits
   -o, --option KEY=VALUE     override a configuration option
 ```
+
+## Nix
+
+The flake builds, tests and runs chezterm on `x86_64-linux` and `aarch64-linux`:
+
+```sh
+nix run . -- --version    # build and run chezterm (apps.default)
+nix build                 # package in ./result (packages.default)
+nix flake check           # every check below
+nix develop               # shell for `make`, `make test`, `make bindings`
+nix fmt                   # format the Nix files (treefmt + nixfmt)
+nix run .#test            # test suite on the working tree
+nix run .#bindings        # regenerate ffi.ss and protocols.ss in the working tree
+nix build .#bindings      # the generated files, built with c2ffi from nixpkgs
+```
+
+Checks (`nix build .#checks.x86_64-linux.NAME`):
+
+| Check | What it does |
+| --- | --- |
+| `chezterm` | builds the package and runs `chezterm --version` |
+| `tests` | `make test` (both passes), with DejaVu fonts through `makeFontsConf` |
+| `generated` | regenerating the bindings and protocols gives the committed files, and `make relink` gives the same file as generating with store paths |
+| `formatting` | `treefmt --ci` |
+| `vm` | NixOS VM with headless sway: starts chezterm, types a command with `wtype`, checks that the shell ran it, takes a `grim` screenshot and a `--dump-frame` image (kept in the output) |
+
+The `vm` check needs KVM (the `kvm` system feature). Without it, skip the
+check, or let QEMU emulate the CPU, which is much slower:
+`nix build .#checks.x86_64-linux.vm --option system-features "kvm nixos-test"`.
+
+How the package works:
+
+- On NixOS, libraries are not found by soname. The package runs
+  `make relink SHARED_OBJECTS="libwayland-client.so.0=/nix/store/.../libwayland-client.so.0 ..."`,
+  which rewrites the `load-shared-object` calls in `src/chezterm/ffi.ss`
+  to absolute store paths. `make bindings SHARED_OBJECTS=...` generates the same file.
+  No `LD_LIBRARY_PATH` wrapper is needed.
+- The launcher calls Chez Scheme by its store path (`make SCHEME=...`).
+- `xdg-utils` is appended to the launcher's `PATH` (`make RUNTIME_PATH=...`)
+  for Ctrl+click on URLs, so a system-wide `xdg-open` still takes precedence.
+  Leave it out with `chezterm.override { xdg-utils = null; }`.
+- The dev shell, `nix run .#test` and plain `make` use the committed bindings,
+  which load libraries by soname, so they set `LD_LIBRARY_PATH`.
+
+The committed `src/chezterm/ffi.ss` is generated with the headers of the
+pinned nixpkgs. Other distributions can generate slightly different
+output, because header versions differ (for example, `FT_Outline`'s `n_points` is
+`short` before FreeType 2.13.3). Such differences do not change the struct layout.
+
+There is no formatter for the Scheme sources. No Chez Scheme formatter keeps
+the hand-aligned layout of the code, and the generated files are written by
+`pretty-print`.
 
 ## Configuration
 
