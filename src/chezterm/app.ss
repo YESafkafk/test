@@ -228,7 +228,8 @@
   (define (relayout!)
     (let ([bw (* logical-width scale)] [bh (* logical-height scale)])
       (renderer-resize! renderer bw bh)
-      (let ([cols (renderer-cols renderer)] [rows (renderer-rows renderer)])
+      ;; at least two columns, so that wide characters always fit
+      (let ([cols (max 2 (renderer-cols renderer))] [rows (renderer-rows renderer)])
         (unless (and (= cols (terminal-cols term)) (= rows (terminal-rows term)))
           (terminal-resize! term rows cols)
           (resize-pty!)))
@@ -695,7 +696,14 @@
 
   ;;; Main loop --------------------------------------------------------------------------------
 
-  (define pollfds (malloc (* 8 16)))
+  (define pollfds-capacity 16)
+  (define pollfds (malloc (* 8 pollfds-capacity)))
+
+  (define (ensure-pollfds! n)
+    (when (> n pollfds-capacity)
+      (free pollfds)
+      (set! pollfds-capacity (* 2 n))
+      (set! pollfds (malloc (* 8 pollfds-capacity)))))
 
   (define (compute-timeout now)
     (let* ([ts '()]
@@ -744,6 +752,7 @@
                   (set! n 2))
                 (let ([first-extra n]
                       [extra (if config-watch-fd (cons config-watch-fd extra) extra)])
+                  (ensure-pollfds! (+ n (length extra)))
                   (for-each (lambda (fd) (set-pollfd! n fd POLLIN) (set! n (+ n 1))) extra)
                   (let ([r (poll pollfds n (compute-timeout (now-ms)))])
                     (if (and (> r 0) (logtest (pollfd-revents 0) (logor POLLIN POLLERR POLLHUP)))
@@ -770,6 +779,8 @@
   (define (child-exited!)
     (set! child-exited #t)
     (close pty-fd)
+    (set! pty-fd #f)
+    (set! write-queue '())
     (pty-child-exited? child-pid)
     (if hold?
         (begin

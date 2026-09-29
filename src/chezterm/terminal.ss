@@ -88,7 +88,9 @@
      (mutable params) (mutable nparams) (mutable colons) (mutable param-started)
      (mutable private) (mutable intermediates)
      (mutable strbuf) (mutable esc-in-string)
-     (mutable default-cursor-style) (mutable default-cursor-blink))
+     (mutable default-cursor-style) (mutable default-cursor-blink)
+     ;; primary screen cursor while the alternate screen is shown
+     (mutable primary-cursor))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -113,7 +115,8 @@
                        (make-fxvector 32 0) 0 (make-bytevector 32 0) #f
                        #f '()
                        (open-output-string) #f
-                       cursor-style cursor-blink)])
+                       cursor-style cursor-blink
+                       #f)])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -213,9 +216,26 @@
     (terminal-cursor-row-set! t (fxmax 0 (fxmin (terminal-cursor-row t) (fx- (terminal-rows t) 1))))
     (terminal-cursor-col-set! t (fxmax 0 (fxmin (terminal-cursor-col t) (fx- (terminal-cols t) 1)))))
 
+  ;; Clear the selection if it intersects screen rows [from, to]: used for
+  ;; scrolls that move text without changing absolute row numbers.
+  (define (touch-rows! t from to)
+    (let ([sel (terminal-selection t)])
+      (when sel
+        (let ([a (terminal-abs-row t from)] [b (terminal-abs-row t to)]
+              [s0 (fxmin (vector-ref sel 1) (vector-ref sel 3))]
+              [s1 (fxmax (vector-ref sel 1) (vector-ref sel 3))])
+          (unless (or (fx< s1 a) (fx> s0 b))
+            (set-selection! t #f))))))
+
+  (define (full-screen-region? t)
+    (and (fx= (terminal-top t) 0) (fx= (terminal-bottom t) (fx- (terminal-rows t) 1))))
+
   (define (scroll-up! t n)
     (let ([g (terminal-grid t)] [top (terminal-top t)])
       (touch-row! t top)
+      ;; only a full-screen scroll into the history keeps absolute rows valid
+      (unless (and (not (terminal-alt-screen t)) (full-screen-region? t))
+        (touch-rows! t top (fx- (terminal-rows t) 1)))
       (let ([before (grid-scroll-counter g)])
         (grid-scroll-up! g top (terminal-bottom t) n (terminal-bg t)
                          (and (not (terminal-alt-screen t)) (fx= top 0)))
@@ -226,6 +246,7 @@
              t (fxmin (grid-hist-count g) (fx+ (terminal-display-offset t) pushed))))))))
 
   (define (scroll-down! t n)
+    (touch-rows! t (terminal-top t) (terminal-bottom t))
     (grid-scroll-down! (terminal-grid t) (terminal-top t) (terminal-bottom t) n (terminal-bg t)))
 
   (define (index! t)
@@ -391,21 +412,42 @@
       (fix-wide-edges! t l col col)
       (do ([i (fx- cols 1) (fx- i 1)]) ((fx< i (fx+ col n)))
         (cell-copy! v (fx- i n) v i))
+      (shift-extras! l col n cols)
       (line-fill! l col (fx+ col n) (terminal-bg t))
       ;; a wide char pushed partially off the edge
       (when (fxlogtest (cell-attrs v (fx- cols 1)) ATTR-WIDE)
-        (line-fill! l (fx- cols 1) cols (terminal-bg t)))
-      (line-extra-set! l #f)))
+        (line-fill! l (fx- cols 1) cols (terminal-bg t)))))
+
+  ;; Move combining marks of columns >= COL by DELTA, dropping those that
+  ;; leave [COL, COLS) (or land left of COL when deleting).
+  (define (shift-extras! l col delta cols)
+    (let ([ex (line-extra l)])
+      (when ex
+        (let-values ([(ks vs) (hashtable-entries ex)])
+          (let ([new (make-eqv-hashtable)])
+            (vector-for-each
+             (lambda (k v)
+               (cond
+                 [(fx< k col) (hashtable-set! new k v)]
+                 [else
+                  (let ([nk (fx+ k delta)])
+                    (when (and (fx>= nk col) (fx< nk cols))
+                      (hashtable-set! new nk v)))]))
+             ks vs)
+            (line-extra-set! l new))))))
 
   (define (delete-chars! t n)
     (let* ([l (cur-line t)] [v (line-cells l)] [cols (terminal-cols t)]
            [col (terminal-cursor-col t)] [n (fxmin n (fx- cols col))])
       (touch-row! t (terminal-cursor-row t))
       (fix-wide-edges! t l col (fx+ col n))
+      (let ([ex (line-extra l)])
+        (when ex
+          (do ([i col (fx+ i 1)]) ((fx>= i (fx+ col n))) (hashtable-delete! ex i))))
       (do ([i col (fx+ i 1)]) ((fx>= i (fx- cols n)))
         (cell-copy! v (fx+ i n) v i))
-      (line-fill! l (fx- cols n) cols (terminal-bg t))
-      (line-extra-set! l #f)))
+      (shift-extras! l col (fx- n) cols)
+      (line-fill! l (fx- cols n) cols (terminal-bg t))))
 
   ;;; Control characters -------------------------------------------------------
 
@@ -427,7 +469,7 @@
     (case c
       [(7) ((terminal-on-bell t))]
       [(8) (when (fx> (terminal-cursor-col t) 0)
-             (terminal-cursor-col-set! t (fx- (terminal-cursor-col t) (if (terminal-wrap-pending t) 0 1))))
+             (terminal-cursor-col-set! t (fx- (terminal-cursor-col t) 1)))
            (terminal-wrap-pending-set! t #f)]
       [(9) (terminal-cursor-col-set! t (next-tab t (terminal-cursor-col t)))
            (terminal-wrap-pending-set! t #f)]
@@ -608,10 +650,12 @@
          (write-char (integer->char c) (terminal-strbuf t))])))
 
   (define (finish-string! t state terminator)
-    (case state
-      [(osc) (osc-dispatch! t (get-output-string (terminal-strbuf t)) terminator)]
-      [(dcs) (dcs-dispatch! t (get-output-string (terminal-strbuf t)))]
-      [else (void)]))
+    ;; malformed strings from applications must never take the terminal down
+    (guard (e [#t (void)])
+      (case state
+        [(osc) (osc-dispatch! t (get-output-string (terminal-strbuf t)) terminator)]
+        [(dcs) (dcs-dispatch! t (get-output-string (terminal-strbuf t)))]
+        [else (void)])))
 
   ;;; ESC sequences ------------------------------------------------------------
 
@@ -725,9 +769,7 @@
                     (do ([n (fxmin (param1 t 0 1) 65535) (fx- n 1)]) ((fx= n 0))
                       (print! t ch)))]
            [(#\c) (when (fx= 0 (param t 0 0)) (respond t "\x1b;[?62;22c"))]
-           [(#\d) (goto! t (fx- (param1 t 0 1) 1) (terminal-cursor-col t))
-                  (when (terminal-origin-mode t)
-                    (terminal-cursor-row-set! t (fxmin (fx- rows 1) (fx- (param1 t 0 1) 1))))]
+           [(#\d) (goto! t (fx- (param1 t 0 1) 1) (terminal-cursor-col t))]
            [(#\g) (case (param t 0 0)
                     [(0) (bytevector-u8-set! (terminal-tabs t) (terminal-cursor-col t) 0)]
                     [(3) (bytevector-fill! (terminal-tabs t) 0)])]
@@ -826,14 +868,14 @@
   (define (insert-lines! t n)
     (let ([row (terminal-cursor-row t)])
       (when (fx<= (terminal-top t) row (terminal-bottom t))
-        (touch-row! t row)
+        (touch-rows! t row (terminal-bottom t))
         (grid-scroll-down! (terminal-grid t) row (terminal-bottom t) n (terminal-bg t))
         (carriage-return! t))))
 
   (define (delete-lines! t n)
     (let ([row (terminal-cursor-row t)])
       (when (fx<= (terminal-top t) row (terminal-bottom t))
-        (touch-row! t row)
+        (touch-rows! t row (terminal-bottom t))
         (grid-scroll-up! (terminal-grid t) row (terminal-bottom t) n (terminal-bg t) #f)
         (carriage-return! t))))
 
@@ -843,7 +885,9 @@
                                (fx* (terminal-cols t) (terminal-cell-width t))))]
       [(16) (respond t (format "\x1b;[6;~a;~at" (terminal-cell-height t) (terminal-cell-width t)))]
       [(18) (respond t (format "\x1b;[8;~a;~at" (terminal-rows t) (terminal-cols t)))]
-      [(22) (terminal-title-stack-set! t (cons (terminal-title t) (terminal-title-stack t)))]
+      [(22) (let ([st (terminal-title-stack t)])
+              (terminal-title-stack-set! t (cons (terminal-title t)
+                                                 (if (fx>= (length st) 10) (list-head st 9) st))))]
       [(23) (let ([s (terminal-title-stack t)])
               (when (pair? s)
                 (terminal-title-stack-set! t (cdr s))
@@ -892,6 +936,7 @@
 
   (define (enter-alt-screen! t clear?)
     (unless (terminal-alt-screen t)
+      (terminal-primary-cursor-set! t (cons (terminal-cursor-row t) (terminal-cursor-col t)))
       (terminal-alt-screen-set! t #t)
       (terminal-grid-set! t (terminal-alt-grid t))
       (terminal-display-offset-set! t 0)
@@ -1038,10 +1083,11 @@
   ;; Parse X11 color specs: rgb:R/G/B (1-4 hex digits) or #RGB / #RRGGBB
   (define (parse-color s)
     (define (hex str)
-      (let ([n (string->number str 16)])
-        (and n (fx> (string-length str) 0)
-             (let ([bits (fx* 4 (string-length str))])
-               (fxquotient (fx* n 255) (fx- (fxsll 1 bits) 1))))))
+      (and (fx<= 1 (string-length str) 4)
+           (for-all (lambda (c) (hex-digit? c)) (string->list str))
+           (let ([n (string->number str 16)]
+                 [bits (fx* 4 (string-length str))])
+             (fxquotient (fx* n 255) (fx- (fxsll 1 bits) 1)))))
     (cond
       [(and (fx> (string-length s) 4) (string=? (substring s 0 4) "rgb:"))
        (let ([parts (string-split (substring s 4 (string-length s)) #\/)])
@@ -1058,6 +1104,13 @@
                 (and r g b (fxior (fxsll r 16) (fxsll g 8) b)))))]
       [else #f]))
 
+  (define (hex-digit? c)
+    (or (char<=? #\0 c #\9) (char<=? #\a (char-downcase c) #\f)))
+
+  (define (palette-index s)
+    (let ([n (string->number s 10)])
+      (and n (fixnum? n) (fx<= 0 n 255) n)))
+
   (define (color-report rgb)
     (let ([r (fxsrl rgb 16)] [g (fxand #xFF (fxsrl rgb 8))] [b (fxand #xFF rgb)])
       (format "rgb:~a/~a/~a" (hex4 r) (hex4 g) (hex4 b))))
@@ -1071,7 +1124,8 @@
                    (cond [(fx= i (string-length s)) #f]
                          [(char=? (string-ref s i) #\;) i]
                          [else (loop (fx+ i 1))]))]
-           [code (string->number (if semi (substring s 0 semi) s))]
+           [code (let ([n (string->number (if semi (substring s 0 semi) s) 10)])
+                   (and n (fixnum? n) n))]
            [rest (if semi (substring s (fx+ semi 1) (string-length s)) "")]
            [palette (terminal-palette t)])
       (terminal-dirty-set! t #t)
@@ -1081,8 +1135,8 @@
         [(4)
          (let loop ([parts (string-split rest #\;)])
            (when (and (pair? parts) (pair? (cdr parts)))
-             (let ([idx (string->number (car parts))] [spec (cadr parts)])
-               (when (and idx (fx<= 0 idx 255))
+             (let ([idx (palette-index (car parts))] [spec (cadr parts)])
+               (when idx
                  (if (string=? spec "?")
                      (respond t (format "\x1b;]4;~a;~a~a" idx (color-report (vector-ref palette idx)) term))
                      (let ([c (parse-color spec)])
@@ -1102,8 +1156,8 @@
              (do ([i 0 (fx+ i 1)]) ((fx= i 256))
                (vector-set! palette i (vector-ref (terminal-default-palette t) i)))
              (for-each (lambda (p)
-                         (let ([i (string->number p)])
-                           (when (and i (fx<= 0 i 255))
+                         (let ([i (palette-index p)])
+                           (when i
                              (vector-set! palette i (vector-ref (terminal-default-palette t) i)))))
                        (string-split rest #\;)))]
         [(110) (vector-set! palette COLOR-FG (vector-ref (terminal-default-palette t) COLOR-FG))]
@@ -1132,6 +1186,7 @@
         (cond
           [(fx= i n) (utf8->string (extract))]
           [(and (char=? (string-ref s i) #\%) (fx< (fx+ i 2) n)
+                (hex-digit? (string-ref s (fx+ i 1))) (hex-digit? (string-ref s (fx+ i 2)))
                 (string->number (substring s (fx+ i 1) (fx+ i 3)) 16))
            => (lambda (b) (put-u8 out b) (loop (fx+ i 3) n))]
           [else (put-bytevector out (string->utf8 (string (string-ref s i)))) (loop (fx+ i 1) n)]))))
@@ -1219,14 +1274,28 @@
   (define (terminal-resize! t rows cols)
     (unless (and (fx= rows (terminal-rows t)) (fx= cols (terminal-cols t)))
       (let ([alt (terminal-alt-screen t)])
-        ;; primary grid: reflow, tracking the (possibly saved) cursor
+        ;; primary grid: reflow, anchored at the primary screen's cursor
         (let* ([saved (terminal-saved-primary t)]
-               [crow (if alt (if saved (vector-ref saved 0) 0) (terminal-cursor-row t))]
-               [ccol (if alt (if saved (vector-ref saved 1) 0) (terminal-cursor-col t))])
+               [pc (if alt
+                       (or (terminal-primary-cursor t) (cons 0 0))
+                       (cons (terminal-cursor-row t) (terminal-cursor-col t)))]
+               [crow (fxmin (car pc) (fx- (terminal-rows t) 1))]
+               [ccol (fxmin (cdr pc) (fx- (terminal-cols t) 1))])
           (let-values ([(r c) (grid-resize! (terminal-primary-grid t) rows cols #t crow ccol)])
             (if alt
-                (when saved (vector-set! saved 0 r) (vector-set! saved 1 c))
-                (begin (terminal-cursor-row-set! t r) (terminal-cursor-col-set! t c)))))
+                (terminal-primary-cursor-set! t (cons r c))
+                (begin (terminal-cursor-row-set! t r) (terminal-cursor-col-set! t c)))
+            ;; a cursor saved at the anchor position follows the content;
+            ;; other saved positions are kept inside the screen
+            (when saved
+              (if (and (fx= (vector-ref saved 0) crow) (fx= (vector-ref saved 1) ccol))
+                  (begin (vector-set! saved 0 r) (vector-set! saved 1 c))
+                  (begin (vector-set! saved 0 (fxmin (vector-ref saved 0) (fx- rows 1)))
+                         (vector-set! saved 1 (fxmin (vector-ref saved 1) (fx- cols 1))))))))
+        (let ([saved (terminal-saved-alt t)])
+          (when saved
+            (vector-set! saved 0 (fxmin (vector-ref saved 0) (fx- rows 1)))
+            (vector-set! saved 1 (fxmin (vector-ref saved 1) (fx- cols 1)))))
         ;; alternate grid: plain truncate / extend
         (let-values ([(r c) (grid-resize! (terminal-alt-grid t) rows cols #f
                                           (if alt (terminal-cursor-row t) 0)

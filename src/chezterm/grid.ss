@@ -261,11 +261,18 @@
                                 (let* ([extra (fx- want-offset len)]
                                        [c (fx+ col extra)]
                                        [row (fx+ (fx- (length lines) 1) (fxquotient c cols))])
-                                  (cons row (fxmin (fxremainder c cols) (fx- cols 1))))))])
+                                  (cons row (fxmin (fxremainder c cols) (fx- cols 1))))))]
+                  ;; add blank lines so that the cursor's row exists
+                  [lines (if (and pos (fx>= (car pos) (length lines)))
+                             (append lines
+                                     (let loop ([k (fx- (car pos) (fx- (length lines) 1))] [acc '()])
+                                       (if (fx= k 0) acc (loop (fx- k 1) (cons (make-line cols) acc)))))
+                             lines)])
              (values lines pos))]
           [else
            (let* ([attrs (cell-attrs v i)]
-                  [w (if (fxlogtest attrs ATTR-WIDE) 2 1)])
+                  ;; a single column can't hold a wide character: show it narrow
+                  [w (if (and (fxlogtest attrs ATTR-WIDE) (fx>= cols 2)) 2 1)])
              (cond
                [(fxlogtest attrs ATTR-SPACER)
                 ;; skip spacer halves; they are regenerated with the wide char
@@ -276,6 +283,9 @@
                 (loop i (cons cur lines) (make-line cols) 0 pos)]
                [else
                 (cell-copy! v i (line-cells cur) col)
+                (when (and (fx= w 1) (fxlogtest attrs ATTR-WIDE))
+                  (let ([c (line-cells cur)] [k (fx* 3 col)])
+                    (fxvector-set! c k (fxand (fxvector-ref c k) (fxnot (fxsll ATTR-WIDE 21))))))
                 (let ([ex (assv i extras)])
                   (when ex
                     (unless (line-extra cur) (line-extra-set! cur (make-eqv-hashtable)))
@@ -306,6 +316,11 @@
   ;; and re-split at the new width.  Returns the cursor's new position as
   ;; (values row col).
   (define (grid-resize! g rows cols reflow? crow ccol)
+    (let ([crow (fxmax 0 (fxmin crow (fx- (grid-rows g) 1)))]
+          [ccol (fxmax 0 (fxmin ccol (fx- (grid-cols g) 1)))])
+      (grid-resize-clamped! g rows cols reflow? crow ccol)))
+
+  (define (grid-resize-clamped! g rows cols reflow? crow ccol)
     (if (and reflow? (not (fx= cols (grid-cols g))))
         (reflow! g rows cols crow ccol)
         (simple-resize! g rows cols crow ccol)))

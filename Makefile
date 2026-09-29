@@ -48,8 +48,11 @@ $(BUILD)/chezterm: $(SRC)
 run: all
 	$(BUILD)/chezterm
 
-test:
-	$(SCHEME) --libdirs src::$(BUILD)/lib --script tests/run.ss
+# The suite runs twice: from source with run-time checks, and against the
+# optimized build (hot paths at optimize-level 3).
+test: all
+	$(SCHEME) -q --libdirs src --script tests/run.ss
+	$(SCHEME) -q --libdirs $(BUILD)/lib --script tests/run.ss
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/lib/chezterm $(DESTDIR)$(PREFIX)/bin

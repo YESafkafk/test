@@ -18,7 +18,7 @@
             (mutable pad-x) (mutable pad-y)
             (mutable row-keys)               ; vector of per-row state
             (mutable last-palette)
-            (mutable last-bg)
+            (mutable last-reverse)
             opacity                          ; 0-255
             bold-is-bright
             selection-fg selection-bg
@@ -111,7 +111,7 @@
            [data (glyph-data g)]
            [base (renderer-pixels r)] [stride (renderer-stride r)]
            [width (renderer-width r)]
-           [ys (fxmax y0 clip0)] [ye (fxmin (fx+ y0 gh) clip1)]
+           [ys (fxmax y0 clip0 0)] [ye (fxmin (fx+ y0 gh) clip1 (renderer-height r))]
            [xs (fxmax x0 0)] [xe (fxmin (fx+ x0 gw) width)])
       (if (glyph-color? g)
           (do ([y ys (fx+ y 1)]) ((fx>= y ye))
@@ -192,13 +192,16 @@
            [palette (terminal-palette term)]
            [bg-default (vector-ref palette COLOR-BG)]
            [full? (not (and (renderer-last-palette r) (equal? (renderer-last-palette r) palette)
+                            (eq? (renderer-last-reverse r) (terminal-reverse-video? term))
                             (fx= (vector-length (renderer-row-keys r)) rows)))]
            [damage '()])
       (when full?
         (renderer-last-palette-set! r (vector-copy palette))
+        (renderer-last-reverse-set! r (terminal-reverse-video? term))
         (renderer-row-keys-set! r (make-vector rows #f))
         (fill-rect! r 0 0 (renderer-width r) (renderer-height r)
-                    (argb bg-default (renderer-opacity r)))
+                    (argb (if (terminal-reverse-video? term) (vector-ref palette COLOR-FG) bg-default)
+                          (renderer-opacity r)))
         (set! damage (list (cons 0 (renderer-height r)))))
       (let* ([keys (renderer-row-keys r)]
              [g (terminal-grid term)]

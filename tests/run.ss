@@ -291,6 +291,65 @@
   (feed t (esc "[18t"))
   (check "report size" "\x1b;[8;3;10t" (car responses)))
 
+;;; regressions from code review
+(let ([t (make-term 24 80)])
+  ;; resize in the alt screen with a saved cursor below the new size
+  (feed t (esc "[24;1H") (esc "7"))
+  (terminal-resize! t 10 80)
+  (feed t (esc "[?1047h"))
+  (check "alt resize with stale saved cursor" #t
+         (begin (terminal-resize! t 10 60) (= 10 (terminal-rows t)))))
+
+(let ([t (make-term 3 4)])
+  (feed t "漢")
+  (terminal-resize! t 3 1)
+  (check "resize to one column with wide char terminates" 1 (terminal-cols t)))
+
+(let ([t (make-term 6 20)])
+  (feed t "1\r\n2\r\n3\r\n4\r\n5\r\n6" (esc "[?1047h"))
+  (terminal-resize! t 3 10)
+  (feed t (esc "[?1047l"))
+  (check "alt resize keeps primary content" '("4" "5" "6") (screen t))
+  (check "alt resize history" "3" (row-text t -1)))
+
+(let ([t (make-term 4 20)])
+  (feed t "top\r\n" (esc "[15C") "\r\nbelow" (esc "[2;16H"))
+  (terminal-resize! t 4 10)
+  (feed t "X")
+  (check "reflow cursor beyond content" "below" (row-text t (+ 1 (terminal-cursor-row t))))
+  (check "reflow cursor row has X" "     X" (row-text t (terminal-cursor-row t))))
+
+(let ([t (make-term 10 20)])
+  (feed t (esc "[5;10r") (esc "[?6h") (esc "[2d"))
+  (check "VPA in origin mode" 5 (terminal-cursor-row t)))
+
+(let ([t (make-term 5 10)])
+  (feed t (esc "[?1049h") "a\r\nb\r\nc\r\nd\r\ne")
+  (terminal-set-selection! t (vector 'stream (terminal-abs-row t 2) 0 (terminal-abs-row t 2) 0))
+  (feed t "\r\nf")
+  (check "alt screen scroll clears selection" #f (terminal-selection t)))
+
+(let ([t (make-term 3 20)])
+  (feed t "cafe\x301; xyz" (esc "[1;10H") (esc "[@"))
+  (check "ICH keeps combining marks" "\x301;"
+         (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 3 #f))
+  (feed t (esc "[1;1H") (esc "[P"))
+  (check "DCH shifts combining marks" "\x301;"
+         (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 2 #f)))
+
+(let ([t (make-term 3 5)])
+  (feed t "abcde\bX")
+  (check "BS with pending wrap" '("abcXe" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (for-each (lambda (s) (feed t s))
+            (list (esc "]4;1.5;?\a") (esc "]11;rgb:ffffffffffffffffffff/0/0\a")
+                  (esc "]7;file://h/a%-1b\a") (esc "]11;rgb:-1/0/0\a") (esc "]104;abc\a")))
+  (check "malformed OSC ignored" #xffffff (vector-ref (terminal-palette t) COLOR-FG))
+  (check "negative color rejected" 0 (vector-ref (terminal-palette t) COLOR-BG))
+  (feed t "ok")
+  (check "terminal alive after bad OSC" '("ok" "" "") (screen t)))
+
 ;;; selection text
 (let* ([t (make-term 4 10)]
        [sel (lambda (mode a ac b bc)
@@ -366,7 +425,10 @@
     (terminal-set-selection! t (vector 'stream (terminal-abs-row t 0) 2 (terminal-abs-row t 1) 3))
     (renderer-render! r t #t #t (lambda (a) '()) #f)
     (check "render selection = fresh" #t (equal? (snapshot r) (fresh-render t)))
-    (check "no damage when unchanged" '() (renderer-render! r t #t #t (lambda (a) '()) #f))))
+    (check "no damage when unchanged" '() (renderer-render! r t #t #t (lambda (a) '()) #f))
+    (feed t (esc "[?5h"))
+    (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
+    (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t)))))
 
 (printf "~a passed, ~a failed\n" passes failures)
 (exit (if (= failures 0) 0 1))
