@@ -759,7 +759,6 @@
            [(#\n) (when (fx= (param t 0 0) 6)
                     (respond t (format "\x1b;[?~a;~aR" (fx+ 1 (terminal-cursor-row t))
                                        (fx+ 1 (terminal-cursor-col t)))))]
-           [(#\u) (respond t "\x1b;[?0u")]         ; kitty keyboard: flags 0
            [else (void)])]
         [(and (eqv? private 62) (null? inter))          ; >
          (case (integer->char c)
