@@ -29,3 +29,4 @@
 #include FT_LCD_FILTER_H
 #include FT_SYNTHESIS_H
 #include <fontconfig/fontconfig.h>
+#include <pixman.h>

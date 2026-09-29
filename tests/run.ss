@@ -426,6 +426,27 @@
     (renderer-render! r t #t #t (lambda (a) '()) #f)
     (check "render selection = fresh" #t (equal? (snapshot r) (fresh-render t)))
     (check "no damage when unchanged" '() (renderer-render! r t #t #t (lambda (a) '()) #f))
+    ;; glyphs actually reach the image, through tiles and the overhang path
+    (let* ([t2 (make-term 2 20)]
+           [r2 (make-renderer f 0 0 1.0 #f #f #x444444 #t)]
+           [cw (font-cell-width f)] [chh (font-cell-height f)]
+           [ink? (lambda (col)
+                   (let loop ([y 0] [x (* col cw)])
+                     (cond [(= y chh) #f]
+                           [(= x (* (+ col 1) cw)) (loop (+ y 1) (* col cw))]
+                           [(not (= (foreign-ref 'unsigned-32 (renderer-pixels r2)
+                                                 (* 4 (+ x (* y (renderer-width r2)))))
+                                    #xff000000))
+                            #t]
+                           [else (loop y (+ x 1))])))])
+      (renderer-resize! r2 (* 20 cw) (* 2 chh))
+      (feed t2 "A \x1b;[3mf\x1b;[0m 日─")
+      (renderer-render! r2 t2 #f #t (lambda (a) '()) #f)
+      (check "glyph drawn" #t (ink? 0))
+      (check "space left blank" #f (ink? 1))
+      (check "italic drawn" #t (ink? 2))
+      (check "wide glyph drawn" #t (ink? 4))
+      (check "box drawing drawn" #t (ink? 6)))
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t)))))

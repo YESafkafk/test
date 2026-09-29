@@ -26,6 +26,7 @@
           libxkbcommon
           freetype
           fontconfig
+          pixman
         ];
 
       devHeaders =
@@ -34,6 +35,7 @@
           libxkbcommon.dev
           freetype.dev
           fontconfig.dev
+          (lib.getDev pixman)
         ];
 
       # c2ffi is a bare libclang tool: it knows neither the clang resource
@@ -177,7 +179,8 @@
                 inCheckout "chezterm-bindings" ''
                   make bindings protocols SCHEME=scheme C2FFI=${lib.getExe pkgs.c2ffi} \
                     C2FFI_FLAGS="${c2ffiFlags pkgs}" \
-                    FT_INC=${lib.getDev pkgs.freetype}/include/freetype2 "$@"
+                    FT_INC=${lib.getDev pkgs.freetype}/include/freetype2 \
+                    PIXMAN_INC=${lib.getDev pkgs.pixman}/include/pixman-1 "$@"
                 ''
               )
             )

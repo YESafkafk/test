@@ -5,7 +5,7 @@ inspired by [Alacritty](https://alacritty.org/). It talks to the compositor
 directly through libwayland; there is no X11 support.
 
 All C bindings (libc, libwayland-client, libwayland-cursor, xkbcommon,
-FreeType, fontconfig) are generated with [c2ffi](https://github.com/rpav/c2ffi):
+FreeType, fontconfig, pixman) are generated with [c2ffi](https://github.com/rpav/c2ffi):
 c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into a Chez
 `foreign-procedure` / `define-ftype` library.
 
@@ -50,16 +50,21 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
 - Optional `bell-command` run on BEL.
-- Incremental software rendering into shared-memory buffers: only changed
-  rows are redrawn, scrolling moves pixels instead of redrawing, and only
-  changed regions are reported to the compositor. Rendering is paced by frame
-  callbacks.
+- Incremental software rendering into shared-memory buffers, composited with
+  [pixman](https://pixman.org/):
+  - only changed rows are redrawn, and scrolling moves pixels instead of redrawing
+  - backgrounds are filled in runs of equal color
+  - text is copied from cached cell tiles (a glyph already blended over its
+    background); glyphs that overhang their cell are composited afterwards
+  - only the rows a buffer is missing are copied into it, and only changed
+    regions are reported to the compositor
+  - rendering is paced by frame callbacks.
 
 ## Requirements
 
 - Chez Scheme 9.5 or newer (`scheme`; tested with 9.5.8 and 10.4)
-- libwayland-client, libwayland-cursor, libxkbcommon, FreeType, fontconfig
-  (runtime libraries)
+- libwayland-client, libwayland-cursor, libxkbcommon, FreeType, fontconfig,
+  pixman (runtime libraries)
 - A Wayland compositor
 - To regenerate the bindings: c2ffi (LLVM/Clang based) and the development
   headers of the libraries above
@@ -68,9 +73,10 @@ On Debian/Ubuntu:
 
 ```sh
 apt install chezscheme libwayland-client0 libwayland-cursor0 libxkbcommon0 \
-            libfreetype6 libfontconfig1 fonts-dejavu-core
+            libfreetype6 libfontconfig1 libpixman-1-0 fonts-dejavu-core
 # to regenerate bindings as well:
-apt install libwayland-dev libxkbcommon-dev libfreetype-dev libfontconfig-dev
+apt install libwayland-dev libxkbcommon-dev libfreetype-dev libfontconfig-dev \
+            libpixman-1-dev
 ```
 
 ## Building and running
@@ -230,7 +236,7 @@ Source layout (`src/chezterm/`):
 | `grid.ss` | cell storage, scrollback ring, reflow |
 | `charwidth.ss` | character widths |
 | `font.ss`, `boxdraw.ss` | fontconfig/FreeType glyphs, built-in box drawing |
-| `render.ss` | incremental software renderer |
+| `render.ss` | incremental software renderer (pixman) |
 | `keyboard.ss` | xkbcommon keymaps, compose, key encoding |
 | `selection.ss` | selection text, word/line bounds, search matches, URLs |
 | `pty.ss` | pseudo-terminal and process spawning |
@@ -240,6 +246,8 @@ Source layout (`src/chezterm/`):
 The escape sequence parser, grid and renderer are compiled with Chez's
 `optimize-level 3`. On a pty they process output as fast as the pty delivers it
 (`seq 1 2000000` takes about 1 s, the same as `script` writing to `/dev/null`).
+Redrawing a full 250×75 screen of colored text (2254×1354 pixels) takes about
+6 ms.
 
 ## Limitations
 
@@ -250,3 +258,6 @@ The escape sequence parser, grid and renderer are compiled with Chez's
 - No Alacritty vi mode, hints UI, IME (`text-input-v3`) or kitty keyboard
   protocol.
 - `TERM` defaults to `xterm-256color`; no custom terminfo entry is shipped.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
+including a possible GPU backend.

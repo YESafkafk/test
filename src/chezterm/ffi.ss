@@ -8,12 +8,12 @@
    FT_StreamDesc_ FT_StreamRec_ FT_ListNodeRec_ FT_ListRec_
    FT_FaceRec_ FT_Matrix_ wl_message wl_interface wl_array
    wl_cursor_image wl_cursor pollfd winsize timespec itimerspec
-   wl_argument malloc calloc free memcpy memmove memset strlen
-   c-getenv setenv unsetenv setlocale wcwidth __errno_location
-   strerror c-read c-write close pipe2 fcntl poll ioctl dup2
-   mmap munmap ftruncate memfd_create fork setsid forkpty
-   execvp _exit waitpid kill getpid chdir readlink
-   timerfd_create timerfd_settime inotify_init1
+   pixman_color wl_argument malloc calloc free memcpy memmove
+   memset strlen c-getenv setenv unsetenv setlocale wcwidth
+   __errno_location strerror c-read c-write close pipe2 fcntl
+   poll ioctl dup2 mmap munmap ftruncate memfd_create fork
+   setsid forkpty execvp _exit waitpid kill getpid chdir
+   readlink timerfd_create timerfd_settime inotify_init1
    inotify_add_watch sigemptyset sigprocmask signal
    wl_display_connect wl_display_disconnect wl_display_get_fd
    wl_display_dispatch wl_display_dispatch_pending
@@ -47,14 +47,17 @@
    FcPatternAddCharSet FcPatternDel FcPatternGetString
    FcPatternGetInteger FcPatternGetDouble FcPatternGetBool
    FcCharSetCreate FcCharSetAddChar FcCharSetDestroy
-   FcCharSetHasChar FcPatternGetCharSet XKB_KEYSYM_NO_FLAGS
-   XKB_KEYSYM_CASE_INSENSITIVE XKB_CONTEXT_NO_FLAGS
-   XKB_KEYMAP_COMPILE_NO_FLAGS XKB_KEYMAP_FORMAT_TEXT_V1
-   XKB_STATE_MODS_DEPRESSED XKB_STATE_MODS_LATCHED
-   XKB_STATE_MODS_LOCKED XKB_STATE_MODS_EFFECTIVE
-   XKB_STATE_LAYOUT_DEPRESSED XKB_STATE_LAYOUT_LATCHED
-   XKB_STATE_LAYOUT_LOCKED XKB_STATE_LAYOUT_EFFECTIVE
-   XKB_STATE_LEDS XKB_STATE_MATCH_ANY XKB_STATE_MATCH_ALL
+   FcCharSetHasChar FcPatternGetCharSet
+   pixman_image_create_bits pixman_image_create_solid_fill
+   pixman_image_unref pixman_image_composite32 pixman_fill
+   pixman_blt XKB_KEYSYM_NO_FLAGS XKB_KEYSYM_CASE_INSENSITIVE
+   XKB_CONTEXT_NO_FLAGS XKB_KEYMAP_COMPILE_NO_FLAGS
+   XKB_KEYMAP_FORMAT_TEXT_V1 XKB_STATE_MODS_DEPRESSED
+   XKB_STATE_MODS_LATCHED XKB_STATE_MODS_LOCKED
+   XKB_STATE_MODS_EFFECTIVE XKB_STATE_LAYOUT_DEPRESSED
+   XKB_STATE_LAYOUT_LATCHED XKB_STATE_LAYOUT_LOCKED
+   XKB_STATE_LAYOUT_EFFECTIVE XKB_STATE_LEDS
+   XKB_STATE_MATCH_ANY XKB_STATE_MATCH_ALL
    XKB_STATE_MATCH_NON_EXCLUSIVE XKB_COMPOSE_COMPILE_NO_FLAGS
    XKB_COMPOSE_FORMAT_TEXT_V1 XKB_COMPOSE_STATE_NO_FLAGS
    XKB_COMPOSE_NOTHING XKB_COMPOSE_COMPOSING
@@ -70,25 +73,28 @@
    FT_LCD_FILTER_LEGACY1 FT_LCD_FILTER_LEGACY FT_LCD_FILTER_MAX
    FcResultMatch FcResultNoMatch FcResultTypeMismatch
    FcResultNoId FcResultOutOfMemory FcMatchPattern FcMatchFont
-   FcMatchScan FcMatchKindEnd FcMatchKindBegin CLOCK_MONOTONIC
-   EAGAIN EINTR EIO ENOENT EPIPE FC_ANTIALIAS FC_CHARSET
-   FC_COLOR FC_DPI FC_FAMILY FC_FILE FC_HINTING FC_HINT_STYLE
-   FC_INDEX FC_MONO FC_PIXEL_SIZE FC_RGBA FC_RGBA_BGR
-   FC_RGBA_NONE FC_RGBA_RGB FC_RGBA_UNKNOWN FC_SCALABLE FC_SIZE
-   FC_SLANT FC_SLANT_ITALIC FC_SLANT_ROMAN FC_SPACING FC_STYLE
-   FC_WEIGHT FC_WEIGHT_BOLD FC_WEIGHT_REGULAR FD_CLOEXEC
-   FT_FACE_FLAG_COLOR FT_FACE_FLAG_FIXED_SIZES
-   FT_FACE_FLAG_SCALABLE FT_LOAD_COLOR FT_LOAD_DEFAULT
-   FT_LOAD_FORCE_AUTOHINT FT_LOAD_NO_BITMAP FT_LOAD_NO_HINTING
-   FT_LOAD_RENDER FT_LOAD_TARGET_LCD FT_LOAD_TARGET_LIGHT
-   FT_LOAD_TARGET_MONO FT_LOAD_TARGET_NORMAL F_GETFL F_SETFD
-   F_SETFL FcFalse FcTrue IN_CLOEXEC IN_CLOSE_WRITE IN_CREATE
-   IN_DELETE_SELF IN_MOVED_TO IN_NONBLOCK LC_ALL LC_CTYPE
-   MAP_SHARED MFD_ALLOW_SEALING MFD_CLOEXEC O_CLOEXEC
-   O_NONBLOCK POLLERR POLLHUP POLLIN POLLNVAL POLLOUT PROT_READ
-   PROT_WRITE SIGCHLD SIGHUP SIGINT SIGPIPE SIGTERM SIG_SETMASK
-   TFD_CLOEXEC TFD_NONBLOCK TIOCGPGRP TIOCSWINSZ
-   WL_MARSHAL_FLAG_DESTROY WNOHANG)
+   FcMatchScan FcMatchKindEnd FcMatchKindBegin PIXMAN_OP_SRC
+   PIXMAN_OP_OVER PIXMAN_OP_OVER_REVERSE PIXMAN_OP_OVERLAY
+   PIXMAN_a8r8g8b8 PIXMAN_x8r8g8b8 PIXMAN_a8b8g8r8
+   PIXMAN_a8r8g8b8_sRGB PIXMAN_a8 CLOCK_MONOTONIC EAGAIN EINTR
+   EIO ENOENT EPIPE FC_ANTIALIAS FC_CHARSET FC_COLOR FC_DPI
+   FC_FAMILY FC_FILE FC_HINTING FC_HINT_STYLE FC_INDEX FC_MONO
+   FC_PIXEL_SIZE FC_RGBA FC_RGBA_BGR FC_RGBA_NONE FC_RGBA_RGB
+   FC_RGBA_UNKNOWN FC_SCALABLE FC_SIZE FC_SLANT FC_SLANT_ITALIC
+   FC_SLANT_ROMAN FC_SPACING FC_STYLE FC_WEIGHT FC_WEIGHT_BOLD
+   FC_WEIGHT_REGULAR FD_CLOEXEC FT_FACE_FLAG_COLOR
+   FT_FACE_FLAG_FIXED_SIZES FT_FACE_FLAG_SCALABLE FT_LOAD_COLOR
+   FT_LOAD_DEFAULT FT_LOAD_FORCE_AUTOHINT FT_LOAD_NO_BITMAP
+   FT_LOAD_NO_HINTING FT_LOAD_RENDER FT_LOAD_TARGET_LCD
+   FT_LOAD_TARGET_LIGHT FT_LOAD_TARGET_MONO
+   FT_LOAD_TARGET_NORMAL F_GETFL F_SETFD F_SETFL FcFalse FcTrue
+   IN_CLOEXEC IN_CLOSE_WRITE IN_CREATE IN_DELETE_SELF
+   IN_MOVED_TO IN_NONBLOCK LC_ALL LC_CTYPE MAP_SHARED
+   MFD_ALLOW_SEALING MFD_CLOEXEC O_CLOEXEC O_NONBLOCK POLLERR
+   POLLHUP POLLIN POLLNVAL POLLOUT PROT_READ PROT_WRITE SIGCHLD
+   SIGHUP SIGINT SIGPIPE SIGTERM SIG_SETMASK TFD_CLOEXEC
+   TFD_NONBLOCK TIOCGPGRP TIOCSWINSZ WL_MARSHAL_FLAG_DESTROY
+   WNOHANG)
   (import (chezscheme))
   (define shared-objects-loaded
     (begin
@@ -98,6 +104,7 @@
       (load-shared-object "libxkbcommon.so.0")
       (load-shared-object "libfreetype.so.6")
       (load-shared-object "libfontconfig.so.1")
+      (load-shared-object "libpixman-1.so.0")
       #t))
   (define-ftype (FT_Bitmap_Size_
                   (struct
@@ -284,6 +291,12 @@
     (timespec (struct [tv_sec long] [tv_nsec long]))
     (itimerspec
       (struct [it_interval timespec] [it_value timespec]))
+    (pixman_color
+      (struct
+        [red unsigned-short]
+        [green unsigned-short]
+        [blue unsigned-short]
+        [alpha unsigned-short]))
     (wl_argument
       (union
         [i int]
@@ -629,6 +642,28 @@
     (foreign-procedure "FcPatternGetCharSet"
       (uptr utf-8 int uptr)
       int))
+  (define pixman_image_create_bits
+    (foreign-procedure "pixman_image_create_bits"
+      (int int int uptr int)
+      uptr))
+  (define pixman_image_create_solid_fill
+    (foreign-procedure "pixman_image_create_solid_fill"
+      (uptr)
+      uptr))
+  (define pixman_image_unref
+    (foreign-procedure "pixman_image_unref" (uptr) int))
+  (define pixman_image_composite32
+    (foreign-procedure "pixman_image_composite32"
+      (int uptr uptr uptr int int int int int int int int)
+      void))
+  (define pixman_fill
+    (foreign-procedure "pixman_fill"
+      (uptr int int int int int int unsigned-int)
+      int))
+  (define pixman_blt
+    (foreign-procedure "pixman_blt"
+      (uptr uptr int int int int int int int int int int)
+      int))
   (define XKB_KEYSYM_NO_FLAGS 0)
   (define XKB_KEYSYM_CASE_INSENSITIVE 1)
   (define XKB_CONTEXT_NO_FLAGS 0)
@@ -688,6 +723,15 @@
   (define FcMatchScan 2)
   (define FcMatchKindEnd 3)
   (define FcMatchKindBegin 0)
+  (define PIXMAN_OP_SRC 1)
+  (define PIXMAN_OP_OVER 3)
+  (define PIXMAN_OP_OVER_REVERSE 4)
+  (define PIXMAN_OP_OVERLAY 50)
+  (define PIXMAN_a8r8g8b8 537036936)
+  (define PIXMAN_x8r8g8b8 537004168)
+  (define PIXMAN_a8b8g8r8 537102472)
+  (define PIXMAN_a8r8g8b8_sRGB 537561224)
+  (define PIXMAN_a8 134316032)
   (define CLOCK_MONOTONIC 1)
   (define EAGAIN 11)
   (define EINTR 4)

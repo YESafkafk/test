@@ -6,6 +6,7 @@
   libxkbcommon,
   freetype,
   fontconfig,
+  pixman,
   # Ctrl+click on a URL runs xdg-open.  Appended to PATH, so a system-wide
   # xdg-open wins; override with null to leave it out.
   xdg-utils,
@@ -28,6 +29,7 @@ let
       (so libxkbcommon "libxkbcommon.so.0")
       (so freetype "libfreetype.so.6")
       (so fontconfig "libfontconfig.so.1")
+      (so pixman "libpixman-1.so.0")
     ];
   scheme = lib.getExe chez;
 in

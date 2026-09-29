@@ -25,8 +25,10 @@
   (import (chezscheme) (chezterm ffi) (chezterm cutil) (chezterm wayland)
           (chezterm protocols) (chezterm keyboard))
 
+  ;; STALE lists the (y0 . y1) row ranges where the buffer differs from the
+  ;; renderer's image, or is 'all for a buffer that was never filled.
   (define-record-type shm-buffer
-    (fields proxy data size width height (mutable busy)))
+    (fields proxy data size width height (mutable busy) (mutable stale)))
 
   (define-record-type window
     (fields display sink
@@ -220,7 +222,7 @@
         (let* ([pool (wl_shm_create_pool (global w "wl_shm") fd size)]
                [format (if (window-opaque? w) WL_SHM_FORMAT_XRGB8888 WL_SHM_FORMAT_ARGB8888)]
                [proxy (wl_shm_pool_create_buffer pool 0 width height stride format)]
-               [b (make-shm-buffer proxy data size width height #f)])
+               [b (make-shm-buffer proxy data size width height #f 'all)])
           (wl_shm_pool_destroy pool)
           (close fd)
           (wl-listen! proxy wl_buffer
@@ -254,10 +256,38 @@
 
   ;; Copy PIXELS (width x height ARGB) to a buffer and commit it.
   ;; DAMAGE is a list of (y0 . y1) buffer row ranges.
+  ;; Sort and coalesce (y0 . y1) ranges.
+  (define (merge-ranges ranges)
+    (let loop ([rs (list-sort (lambda (a b) (< (car a) (car b))) ranges)] [acc '()])
+      (cond
+        [(null? rs) (reverse acc)]
+        [(and (pair? acc) (<= (car (car rs)) (cdr (car acc))))
+         (loop (cdr rs) (cons (cons (car (car acc)) (max (cdr (car acc)) (cdr (car rs)))) (cdr acc)))]
+        [else (loop (cdr rs) (cons (car rs) acc))])))
+
   (define (window-present! w pixels width height damage opacity<1)
     (set! buffers-opaque (not opacity<1))
-    (let ([b (get-buffer! w width height)] [surface (window-surface w)])
-      (memcpy (shm-buffer-data b) pixels (* 4 width height))
+    (let* ([b (get-buffer! w width height)]
+           [surface (window-surface w)]
+           [stride (* 4 width)]
+           [damage (merge-ranges damage)])
+      ;; every buffer now lags behind the image in the damaged rows
+      (for-each (lambda (other)
+                  (unless (eq? (shm-buffer-stale other) 'all)
+                    (let ([stale (append damage (shm-buffer-stale other))])
+                      (shm-buffer-stale-set! other (if (> (length stale) 64) 'all stale)))))
+                (window-buffers w))
+      ;; bring the chosen buffer up to date: only the rows it is missing
+      (let ([stale (shm-buffer-stale b)])
+        (if (eq? stale 'all)
+            (memcpy (shm-buffer-data b) pixels (* stride height))
+            (for-each (lambda (r)
+                        (let ([y0 (max 0 (car r))] [y1 (min height (cdr r))])
+                          (when (< y0 y1)
+                            (memcpy (+ (shm-buffer-data b) (* y0 stride)) (+ pixels (* y0 stride))
+                                    (* (- y1 y0) stride)))))
+                      (merge-ranges stale))))
+      (shm-buffer-stale-set! b '())
       (wl_surface_attach surface (shm-buffer-proxy b) 0 0)
       (wl_surface_set_buffer_scale surface (window-scale w))
       (for-each (lambda (d) (wl_surface_damage_buffer surface 0 (car d) width (- (cdr d) (car d))))

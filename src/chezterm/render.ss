@@ -11,14 +11,25 @@
           renderer-cols renderer-rows renderer-set-padding! renderer-free!)
   (import (chezscheme) (chezterm ffi) (chezterm grid) (chezterm terminal) (chezterm font))
 
+;; The image is composited with pixman: backgrounds are filled in runs,
+;; glyphs are drawn as a solid color through an a8 mask (or composited
+;; directly for color glyphs).  pixman images for glyphs and solid colors
+;; are cached.
   (define-record-type renderer
     (fields (mutable font)
             (mutable width) (mutable height) (mutable stride)
             (mutable pixels)                 ; malloc'd shadow image
+            (mutable image)                  ; pixman image of the pixels
             (mutable pad-x) (mutable pad-y)
             (mutable row-keys)               ; vector of per-row state
             (mutable last-palette)
             (mutable last-reverse)
+            glyph-images                     ; glyph -> (pixman-image . bits)
+            solids                           ; argb -> pixman solid image
+            tiles                            ; glyph -> (fg/bg key -> tile bits)
+            (mutable tile-count)
+            ascii-tiles                      ; direct-mapped: #(fg bg span bits) per cp/style
+            (mutable row-fg) (mutable row-bg)
             opacity                          ; 0-255
             bold-is-bright
             selection-fg selection-bg
@@ -26,7 +37,9 @@
     (protocol
      (lambda (new)
        (lambda (font pad-x pad-y opacity bold-is-bright sel-fg sel-bg hollow)
-         (new font 0 0 0 0 pad-x pad-y (make-vector 0 #f) #f #f
+         (new font 0 0 0 0 0 pad-x pad-y (make-vector 0 #f) #f #f
+              (make-eq-hashtable) (make-eqv-hashtable) (make-eq-hashtable) 0
+              (make-vector 512 #f) (make-fxvector 0) (make-fxvector 0)
               (max 0 (min 255 (exact (round (* 255 opacity)))))
               bold-is-bright sel-fg sel-bg hollow)))))
 
@@ -41,7 +54,29 @@
     (vector-fill! (renderer-row-keys r) #f)
     (renderer-last-palette-set! r #f))
 
+  (define (clear-glyph-images! r)
+    (let-values ([(ks vs) (hashtable-entries (renderer-glyph-images r))])
+      (vector-for-each (lambda (e) (pixman_image_unref (car e)) (free (cdr e))) vs))
+    (hashtable-clear! (renderer-glyph-images r)))
+
+  (define (clear-solids! r)
+    (let-values ([(ks vs) (hashtable-entries (renderer-solids r))])
+      (vector-for-each pixman_image_unref vs))
+    (hashtable-clear! (renderer-solids r)))
+
+  (define (clear-tiles! r)
+    (let-values ([(gs tables) (hashtable-entries (renderer-tiles r))])
+      (vector-for-each
+       (lambda (t) (let-values ([(ks vs) (hashtable-entries t)]) (vector-for-each free vs)))
+       tables))
+    (hashtable-clear! (renderer-tiles r))
+    (vector-fill! (renderer-ascii-tiles r) #f)
+    (renderer-tile-count-set! r 0))
+
   (define (renderer-set-font! r font)
+    ;; the glyph records of the old font are gone with it
+    (clear-tiles! r)
+    (clear-glyph-images! r)
     (renderer-font-set! r font)
     (renderer-invalidate! r))
 
@@ -50,17 +85,28 @@
     (renderer-pad-y-set! r y)
     (renderer-invalidate! r))
 
-  (define (renderer-free! r)
+  (define (free-pixels! r)
+    (unless (eqv? 0 (renderer-image r)) (pixman_image_unref (renderer-image r)))
     (unless (eqv? 0 (renderer-pixels r)) (free (renderer-pixels r)))
+    (renderer-image-set! r 0)
     (renderer-pixels-set! r 0))
+
+  (define (renderer-free! r)
+    (free-pixels! r)
+    (clear-tiles! r)
+    (clear-glyph-images! r)
+    (clear-solids! r))
 
   (define (renderer-resize! r width height)
     (unless (and (fx= width (renderer-width r)) (fx= height (renderer-height r)))
-      (unless (eqv? 0 (renderer-pixels r)) (free (renderer-pixels r)))
+      (free-pixels! r)
       (renderer-width-set! r width)
       (renderer-height-set! r height)
       (renderer-stride-set! r (fx* 4 width))
-      (renderer-pixels-set! r (malloc (max 4 (fx* 4 (fx* width height)))))
+      (let ([pixels (malloc (max 4 (fx* 4 (fx* width height))))])
+        (renderer-pixels-set! r pixels)
+        (renderer-image-set! r (pixman_image_create_bits PIXMAN_a8r8g8b8 (fxmax width 1)
+                                                         (fxmax height 1) pixels (fx* 4 width))))
       (renderer-invalidate! r)))
 
   ;;; Pixel helpers ------------------------------------------------------------
@@ -79,60 +125,114 @@
                (div255 (fx* a (fxand #xFF rgb))))))
 
   (define (fill-rect! r x0 y0 x1 y1 pixel)
-    (let ([base (renderer-pixels r)] [stride (renderer-stride r)]
-          [x0 (fxmax 0 x0)] [y0 (fxmax 0 y0)]
+    (let ([x0 (fxmax 0 x0)] [y0 (fxmax 0 y0)]
           [x1 (fxmin x1 (renderer-width r))] [y1 (fxmin y1 (renderer-height r))])
-      (do ([y y0 (fx+ y 1)]) ((fx>= y y1))
-        (let ([row (+ base (fx* y stride))])
-          (do ([x x0 (fx+ x 1)]) ((fx>= x x1))
-            (foreign-set! 'unsigned-32 row (fx* x 4) pixel))))))
+      (when (and (fx< x0 x1) (fx< y0 y1))
+        (pixman_fill (renderer-pixels r) (renderer-width r) 32 x0 y0 (fx- x1 x0) (fx- y1 y0) pixel))))
 
-  ;; blend opaque color RGB with coverage A onto the pixel at address p
-  (define-syntax blend!
-    (syntax-rules ()
-      [(_ p off rgb a)
-       (cond
-         [(fx= a 0) (void)]
-         [(fx= a 255) (foreign-set! 'unsigned-32 p off (fxior #xFF000000 rgb))]
-         [else
-          (let* ([d (foreign-ref 'unsigned-32 p off)]
-                 [ia (fx- 255 a)])
-            (foreign-set! 'unsigned-32 p off
-              (fxior (fxsll (div255 (fx+ (fx* 255 a) (fx* ia (fxsrl d 24)))) 24)
-                     (fxsll (div255 (fx+ (fx* a (fxsrl rgb 16)) (fx* ia (fxand #xFF (fxsrl d 16))))) 16)
-                     (fxsll (div255 (fx+ (fx* a (fxand #xFF (fxsrl rgb 8))) (fx* ia (fxand #xFF (fxsrl d 8))))) 8)
-                     (div255 (fx+ (fx* a (fxand #xFF rgb)) (fx* ia (fxand #xFF d)))))))])]))
+  (define color-buf (make-ftype-pointer pixman_color (malloc (ftype-sizeof pixman_color))))
+
+  ;; pixman solid-fill image for opaque RGB
+  (define (solid r rgb)
+    (let ([cache (renderer-solids r)])
+      (or (hashtable-ref cache rgb #f)
+          (begin
+            (when (fx> (hashtable-size cache) 1024) (clear-solids! r))
+            (ftype-set! pixman_color (red) color-buf (fx* 257 (fxsrl rgb 16)))
+            (ftype-set! pixman_color (green) color-buf (fx* 257 (fxand #xFF (fxsrl rgb 8))))
+            (ftype-set! pixman_color (blue) color-buf (fx* 257 (fxand #xFF rgb)))
+            (ftype-set! pixman_color (alpha) color-buf #xFFFF)
+            (let ([img (pixman_image_create_solid_fill (ftype-pointer-address color-buf))])
+              (hashtable-set! cache rgb img)
+              img)))))
+
+  ;; pixman image holding glyph G's bitmap (a8 mask, or premultiplied ARGB)
+  (define (glyph-image r g)
+    (let ([cache (renderer-glyph-images r)])
+      (car
+       (or (hashtable-ref cache g #f)
+           (let* ([w (glyph-width g)] [h (glyph-height g)] [data (glyph-data g)]
+                  [color (glyph-color? g)]
+                  [bpp (if color 4 1)]
+                  [stride (fxand (fx+ (fx* w bpp) 3) (fxnot 3))]
+                  [bits (malloc (fxmax 4 (fx* stride h)))])
+             (do ([y 0 (fx+ y 1)]) ((fx= y h))
+               (let ([src (fx* y (fx* w bpp))] [dst (+ bits (fx* y stride))])
+                 (do ([x 0 (fx+ x 1)]) ((fx= x (fx* w bpp)))
+                   (foreign-set! 'unsigned-8 dst x (bytevector-u8-ref data (fx+ src x))))))
+             (let ([e (cons (pixman_image_create_bits (if color PIXMAN_a8r8g8b8 PIXMAN_a8)
+                                                      w h bits stride)
+                            bits)])
+               (hashtable-set! cache g e)
+               e))))))
+
+;; Tile for printable ASCII CP in STYLE: a one-entry cache per character
+  ;; avoids the hashtable lookups for the common case of runs of text in
+  ;; the same colors.
+  (define (ascii-tile r cp style fg bg span)
+    (let* ([cache (renderer-ascii-tiles r)]
+           [k (fx+ cp (fx* 128 style))]
+           [e (vector-ref cache k)])
+      (if (and e (fx= (vector-ref e 0) fg) (fx= (vector-ref e 1) bg) (fx= (vector-ref e 2) span))
+          (vector-ref e 3)
+          (let ([g (font-get-glyph (renderer-font r) cp style)])
+            ;; only glyphs inside their cell can be tiles
+            (and (fx>= (glyph-left g) 0) (fx<= (fx+ (glyph-left g) (glyph-width g)) span)
+                 (let ([bits (cell-tile r g fg bg span)])
+                   (vector-set! cache k (vector fg bg span bits))
+                   bits))))))
+
+  ;; A cell tile: glyph G in color FG over background pixel BG, SPAN pixels
+  ;; wide and one cell high, ready to be copied with pixman_blt.  Only used
+  ;; for glyphs that fit horizontally inside their cell.
+  (define max-tiles 8192)
+
+  (define (cell-tile r g fg bg span)
+    (let* ([per-glyph (or (hashtable-ref (renderer-tiles r) g #f)
+                          (let ([t (make-eqv-hashtable)])
+                            (hashtable-set! (renderer-tiles r) g t)
+                            t))]
+           ;; fg: 24 bits, bg: 32 bits, span flag: 1 bit -> fits a fixnum
+           [key (fxior (fxsll fg 33) (fxsll bg 1) (if (fx> span (font-cell-width (renderer-font r))) 1 0))])
+      (or (hashtable-ref per-glyph key #f)
+          (let* ([font (renderer-font r)]
+                 [ch (font-cell-height font)]
+                 [bits (malloc (fx* 4 (fx* span ch)))]
+                 [img (pixman_image_create_bits PIXMAN_a8r8g8b8 span ch bits (fx* 4 span))]
+                 [x0 (glyph-left g)]
+                 [y0 (fx- (font-baseline font) (glyph-top g))]
+                 [ys (fxmax y0 0)] [ye (fxmin (fx+ y0 (glyph-height g)) ch)])
+            (when (fx>= (renderer-tile-count r) max-tiles) (clear-tiles! r))
+            (pixman_fill bits span 32 0 0 span ch bg)
+            (when (fx< ys ye)
+              (if (glyph-color? g)
+                  (pixman_image_composite32 PIXMAN_OP_OVER (glyph-image r g) 0 img
+                                            0 (fx- ys y0) 0 0 x0 ys (glyph-width g) (fx- ye ys))
+                  (pixman_image_composite32 PIXMAN_OP_OVER (solid r fg) (glyph-image r g) img
+                                            0 0 0 (fx- ys y0) x0 ys (glyph-width g) (fx- ye ys))))
+            (pixman_image_unref img)
+            ;; the table may have been emptied by clear-tiles!
+            (let ([per-glyph (or (hashtable-ref (renderer-tiles r) g #f)
+                                 (let ([t (make-eqv-hashtable)])
+                                   (hashtable-set! (renderer-tiles r) g t)
+                                   t))])
+              (hashtable-set! per-glyph key bits))
+            (renderer-tile-count-set! r (fx+ 1 (renderer-tile-count r)))
+            bits))))
 
   ;; Draw glyph G with pen at (px, baseline-y) in color RGB, clipped to
   ;; rows [clip0, clip1).
   (define (draw-glyph! r g px by rgb clip0 clip1)
     (let* ([gw (glyph-width g)] [gh (glyph-height g)]
            [x0 (fx+ px (glyph-left g))] [y0 (fx- by (glyph-top g))]
-           [data (glyph-data g)]
-           [base (renderer-pixels r)] [stride (renderer-stride r)]
-           [width (renderer-width r)]
            [ys (fxmax y0 clip0 0)] [ye (fxmin (fx+ y0 gh) clip1 (renderer-height r))]
-           [xs (fxmax x0 0)] [xe (fxmin (fx+ x0 gw) width)])
-      (if (glyph-color? g)
-          (do ([y ys (fx+ y 1)]) ((fx>= y ye))
-            (let ([row (+ base (fx* y stride))] [src (fx* 4 (fx* (fx- y y0) gw))])
-              (do ([x xs (fx+ x 1)]) ((fx>= x xe))
-                (let* ([i (fx+ src (fx* 4 (fx- x x0)))]
-                       [sa (bytevector-u8-ref data (fx+ i 3))])
-                  (unless (fx= sa 0)
-                    (let* ([off (fx* x 4)]
-                           [d (foreign-ref 'unsigned-32 row off)]
-                           [ia (fx- 255 sa)])
-                      (foreign-set! 'unsigned-32 row off
-                        (fxior (fxsll (fx+ sa (div255 (fx* ia (fxsrl d 24)))) 24)
-                               (fxsll (fx+ (bytevector-u8-ref data (fx+ i 2)) (div255 (fx* ia (fxand #xFF (fxsrl d 16))))) 16)
-                               (fxsll (fx+ (bytevector-u8-ref data (fx+ i 1)) (div255 (fx* ia (fxand #xFF (fxsrl d 8))))) 8)
-                               (fx+ (bytevector-u8-ref data i) (div255 (fx* ia (fxand #xFF d))))))))))))
-          (do ([y ys (fx+ y 1)]) ((fx>= y ye))
-            (let ([row (+ base (fx* y stride))] [src (fx* (fx- y y0) gw)])
-              (do ([x xs (fx+ x 1)]) ((fx>= x xe))
-                (let ([a (bytevector-u8-ref data (fx+ src (fx- x x0)))])
-                  (blend! row (fx* x 4) rgb a))))))))
+           [xs (fxmax x0 0)] [xe (fxmin (fx+ x0 gw) (renderer-width r))])
+      (when (and (fx< ys ye) (fx< xs xe))
+        (if (glyph-color? g)
+            (pixman_image_composite32 PIXMAN_OP_OVER (glyph-image r g) 0 (renderer-image r)
+                                      (fx- xs x0) (fx- ys y0) 0 0 xs ys (fx- xe xs) (fx- ye ys))
+            (pixman_image_composite32 PIXMAN_OP_OVER (solid r rgb) (glyph-image r g) (renderer-image r)
+                                      0 0 (fx- xs x0) (fx- ys y0) xs ys (fx- xe xs) (fx- ye ys))))))
 
   ;;; Colors -----------------------------------------------------------------
 
@@ -281,86 +381,124 @@
            [opacity (renderer-opacity r)]
            [bg-default (vector-ref palette COLOR-BG)]
            [reverse-video (terminal-reverse-video? term)]
+           [bold-bright (renderer-bold-is-bright r)]
            [cursor-col (and cur (car cur))]
            [cursor-style (and cur (cadr cur))]
            [cursor-focused (and cur (caddr cur))]
            [cursor-shown (and cur (cadddr cur))]
            [cursor-rgb (vector-ref palette COLOR-CURSOR)]
+           [block-cursor (and cur cursor-shown cursor-focused (eq? cursor-style 'block))]
            [sel-bg (renderer-selection-bg r)]
-           [sel-fg (renderer-selection-fg r)])
-      ;; compute per-cell colors: returns (values fg bg bg-is-default)
-      (define (cell-colors i)
+           [sel-fg (renderer-selection-fg r)]
+           [row-fg (let ([f (renderer-row-fg r)])
+                     (if (fx>= (fxvector-length f) ncols) f
+                         (let ([f (make-fxvector ncols)]) (renderer-row-fg-set! r f) f)))]
+           [row-bg (let ([b (renderer-row-bg r)])
+                     (if (fx>= (fxvector-length b) ncols) b
+                         (let ([b (make-fxvector ncols)]) (renderer-row-bg-set! r b) b)))]
+           [pixels (renderer-pixels r)]
+           [width (renderer-width r)])
+      ;; pass 1: the foreground color and background pixel of every cell
+      (do ([i 0 (fx+ i 1)]) ((fx= i ncols))
         (let* ([attrs (cell-attrs v i)]
                [fgc (cell-fg v i)] [bgc (cell-bg v i)]
-               [fgc (if (and (renderer-bold-is-bright r) (fxlogtest attrs ATTR-BOLD) (fx< fgc 8))
-                        (fx+ fgc 8) fgc)]
+               [fgc (if (and bold-bright (fx< fgc 8) (fxlogtest attrs ATTR-BOLD)) (fx+ fgc 8) fgc)]
                [fg (color->rgb palette fgc)]
                [fg (if (fxlogtest attrs ATTR-DIM) (dim fg) fg)]
                [bg (color->rgb palette bgc)]
-               [default-bg (fx= bgc COLOR-BG)]
-               [rev (not (eq? (fxlogtest attrs ATTR-REVERSE) reverse-video))])
-          (let-values ([(fg bg default-bg) (if rev (values bg fg #f) (values fg bg default-bg))])
-            (let* ([selected (and srange (fx<= (car srange) i) (fx< i (cdr srange)))]
-                   [hl (and (pair? hl)
-                            (find (lambda (h) (and (fx<= (car h) i) (fx< i (cadr h)))) hl))])
-              (cond
-                [hl (values 0 (if (caddr hl) #xF0A030 #x8A6A20) #f)]
-                [selected (values (or sel-fg fg) sel-bg #f)]
-                [else (values (if (fxlogtest attrs ATTR-HIDDEN) bg fg) bg default-bg)])))))
+               [rev (not (eq? (fxlogtest attrs ATTR-REVERSE) reverse-video))]
+               [h (and (pair? hl) (find (lambda (h) (and (fx<= (car h) i) (fx< i (cadr h)))) hl))])
+          (let-values ([(fg bg default-bg)
+                        (cond
+                          [h (values 0 (if (caddr h) #xF0A030 #x8A6A20) #f)]
+                          [(and srange (fx<= (car srange) i) (fx< i (cdr srange)))
+                           (values (or sel-fg (if rev bg fg)) sel-bg #f)]
+                          [rev (values bg fg #f)]
+                          [else (values fg bg (fx= bgc COLOR-BG))])])
+            (let ([fg (if (fxlogtest attrs ATTR-HIDDEN) bg fg)])
+              (if (and block-cursor (fx= i cursor-col))
+                  (begin (fxvector-set! row-fg i (vector-ref palette COLOR-BG))
+                         (fxvector-set! row-bg i (argb cursor-rgb 255)))
+                  (begin (fxvector-set! row-fg i fg)
+                         (fxvector-set! row-bg i (argb bg (if default-bg opacity 255)))))))))
+      ;; wide block cursor covers both halves
+      (when (and block-cursor (fx< (fx+ cursor-col 1) ncols)
+                 (fxlogtest (cell-attrs v cursor-col) ATTR-WIDE))
+        (fxvector-set! row-bg (fx+ cursor-col 1) (argb cursor-rgb 255)))
       ;; padding at both sides of the row
       (let ([pad-pixel (argb (if reverse-video (vector-ref palette COLOR-FG) bg-default) opacity)])
         (fill-rect! r 0 y0 px y1 pad-pixel)
-        (fill-rect! r (fx+ px (fx* ncols cw)) y0 (renderer-width r) y1 pad-pixel))
-      ;; backgrounds
-      (do ([i 0 (fx+ i 1)]) ((fx= i ncols))
-        (let-values ([(fg bg default-bg) (cell-colors i)])
-          (let ([x (fx+ px (fx* i cw))])
-            (fill-rect! r x y0 (fx+ x cw) y1 (argb bg (if default-bg opacity 255))))))
-      ;; block cursor background
-      (let ([block-cursor (and cur cursor-shown cursor-focused (eq? cursor-style 'block))])
-        (when block-cursor
-          (let* ([wide (and (fx< (fx+ cursor-col 1) ncols) (fxlogtest (cell-attrs v cursor-col) ATTR-WIDE))]
-                 [x (fx+ px (fx* cursor-col cw))])
-            (fill-rect! r x y0 (fx+ x (fx* cw (if wide 2 1))) y1 (argb cursor-rgb 255))))
-        ;; glyphs and decorations
+        (fill-rect! r (fx+ px (fx* ncols cw)) y0 width y1 pad-pixel))
+      ;; pass 2: backgrounds, filled in runs of equal color
+      (let loop ([i 0] [start 0])
+        (when (fx< start ncols)
+          (if (and (fx< i ncols) (fx= (fxvector-ref row-bg i) (fxvector-ref row-bg start)))
+              (loop (fx+ i 1) start)
+              (begin
+                (fill-rect! r (fx+ px (fx* start cw)) y0 (fx+ px (fx* i cw)) y1
+                            (fxvector-ref row-bg start))
+                (loop i i)))))
+      ;; pass 3: glyphs.  Glyphs that fit their cell are copied as cached
+      ;; tiles (glyph over background); overhanging ones are composited
+      ;; afterwards so they draw over the neighbouring backgrounds.
+      (let ([overhang '()])
         (do ([i 0 (fx+ i 1)]) ((fx= i ncols))
-          (let* ([cp (cell-ch v i)] [attrs (cell-attrs v i)])
-            (unless (fxlogtest attrs ATTR-SPACER)
-              (let-values ([(fg bg default-bg) (cell-colors i)])
-                (let* ([x (fx+ px (fx* i cw))]
-                       [fg (if (and block-cursor (fx= i cursor-col)) (vector-ref palette COLOR-BG) fg)]
-                       [style (fxior (if (fxlogtest attrs ATTR-BOLD) STYLE-BOLD 0)
-                                     (if (fxlogtest attrs ATTR-ITALIC) STYLE-ITALIC 0))])
-                  (when (and (fx> cp 32) (not (fxlogtest attrs ATTR-HIDDEN)))
-                    (let* ([marks (and ex (hashtable-ref ex i #f))]
-                           [g (if marks
-                                  (font-get-cluster-glyph font cp marks style)
-                                  (font-get-glyph font cp style))])
-                      (draw-glyph! r g x by fg y0 y1)))
-                  (let ([ul (fxsrl (fxand attrs ATTR-UNDERLINE-MASK) ATTR-UNDERLINE-SHIFT)]
-                        [w (if (fxlogtest attrs ATTR-WIDE) (fx* 2 cw) cw)])
-                    (unless (fx= ul UL-NONE)
-                      (draw-underline! r ul x (fx+ x w) y0 y1 fg))
-                    (when (fxlogtest attrs ATTR-STRIKE)
-                      (let ([sy (fx+ y0 (font-strikeout-position font))]
-                            [t (font-underline-thickness font)])
-                        (fill-rect! r x sy (fx+ x w) (fx+ sy t) (argb fg 255))))))))))
-        ;; other cursor shapes
-        (when (and cur cursor-shown (not block-cursor))
-          (let* ([wide (and (fx< (fx+ cursor-col 1) ncols) (fxlogtest (cell-attrs v cursor-col) ATTR-WIDE))]
-                 [x (fx+ px (fx* cursor-col cw))]
-                 [x1 (fx+ x (fx* cw (if wide 2 1)))]
-                 [t (fxmax 1 (fxquotient (font-cell-width font) 6))]
-                 [pixel (argb cursor-rgb 255)])
-            (cond
-              [(not cursor-focused)
-               ;; hollow block
-               (fill-rect! r x y0 x1 (fx+ y0 1) pixel)
-               (fill-rect! r x (fx- y1 1) x1 y1 pixel)
-               (fill-rect! r x y0 (fx+ x 1) y1 pixel)
-               (fill-rect! r (fx- x1 1) y0 x1 y1 pixel)]
-              [(eq? cursor-style 'beam) (fill-rect! r x y0 (fx+ x t) y1 pixel)]
-              [else (fill-rect! r x (fx- y1 t) x1 y1 pixel)]))))))
+          (let ([cp (cell-ch v i)] [attrs (cell-attrs v i)])
+            (when (and (fx> cp 32)
+                       (not (fxlogtest attrs (fxior ATTR-SPACER ATTR-HIDDEN))))
+              (let* ([x (fx+ px (fx* i cw))]
+                     [fg (fxvector-ref row-fg i)]
+                     [bg (fxvector-ref row-bg i)]
+                     [style (fxior (if (fxlogtest attrs ATTR-BOLD) STYLE-BOLD 0)
+                                   (if (fxlogtest attrs ATTR-ITALIC) STYLE-ITALIC 0))]
+                     [marks (and ex (hashtable-ref ex i #f))]
+                     [span (if (and (fxlogtest attrs ATTR-WIDE) (fx< (fx+ i 1) ncols)) (fx* 2 cw) cw)]
+                     [bits (and (fx< cp 127) (not marks) (fx<= (fx+ x span) width)
+                                (ascii-tile r cp style fg bg span))])
+                (if bits
+                    (pixman_blt bits pixels span width 32 32 0 0 x y0 span ch)
+                    (let ([g (if marks
+                                 (font-get-cluster-glyph font cp marks style)
+                                 (font-get-glyph font cp style))])
+                      (if (and (fx>= (glyph-left g) 0)
+                               (fx<= (fx+ (glyph-left g) (glyph-width g)) span)
+                               (fx<= (fx+ x span) width))
+                          (pixman_blt (cell-tile r g fg bg span)
+                                      pixels span width 32 32 0 0 x y0 span ch)
+                          (set! overhang (cons (list g x fg) overhang)))))))))
+        (for-each (lambda (o) (draw-glyph! r (car o) (cadr o) by (caddr o) y0 y1))
+                  (reverse overhang)))
+      ;; pass 4: underlines and strikethrough
+      (do ([i 0 (fx+ i 1)]) ((fx= i ncols))
+        (let ([attrs (cell-attrs v i)])
+          (when (and (fxlogtest attrs (fxior ATTR-UNDERLINE-MASK ATTR-STRIKE))
+                     (not (fxlogtest attrs ATTR-SPACER)))
+            (let ([x (fx+ px (fx* i cw))]
+                  [fg (fxvector-ref row-fg i)]
+                  [ul (fxsrl (fxand attrs ATTR-UNDERLINE-MASK) ATTR-UNDERLINE-SHIFT)]
+                  [w (if (fxlogtest attrs ATTR-WIDE) (fx* 2 cw) cw)])
+              (unless (fx= ul UL-NONE)
+                (draw-underline! r ul x (fx+ x w) y0 y1 fg))
+              (when (fxlogtest attrs ATTR-STRIKE)
+                (let ([sy (fx+ y0 (font-strikeout-position font))]
+                      [t (font-underline-thickness font)])
+                  (fill-rect! r x sy (fx+ x w) (fx+ sy t) (argb fg 255))))))))
+      ;; other cursor shapes
+      (when (and cur cursor-shown (not block-cursor))
+        (let* ([wide (and (fx< (fx+ cursor-col 1) ncols) (fxlogtest (cell-attrs v cursor-col) ATTR-WIDE))]
+               [x (fx+ px (fx* cursor-col cw))]
+               [x1 (fx+ x (fx* cw (if wide 2 1)))]
+               [t (fxmax 1 (fxquotient (font-cell-width font) 6))]
+               [pixel (argb cursor-rgb 255)])
+          (cond
+            [(not cursor-focused)
+             ;; hollow block
+             (fill-rect! r x y0 x1 (fx+ y0 1) pixel)
+             (fill-rect! r x (fx- y1 1) x1 y1 pixel)
+             (fill-rect! r x y0 (fx+ x 1) y1 pixel)
+             (fill-rect! r (fx- x1 1) y0 x1 y1 pixel)]
+            [(eq? cursor-style 'beam) (fill-rect! r x y0 (fx+ x t) y1 pixel)]
+            [else (fill-rect! r x (fx- y1 t) x1 y1 pixel)])))))
 
   (define (draw-underline! r style x0 x1 y0 y1 rgb)
     (let* ([font (renderer-font r)]

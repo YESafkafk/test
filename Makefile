@@ -7,6 +7,7 @@ C2FFI_FLAGS ?=
 PREFIX   ?= /usr/local
 BUILD    := build
 FT_INC   ?= $(shell pkg-config --variable=includedir freetype2 2>/dev/null || echo /usr/include)/freetype2
+PIXMAN_INC ?= $(shell pkg-config --variable=includedir pixman-1 2>/dev/null || echo /usr/include)/pixman-1
 
 # Shared objects the FFI loads, as SONAME=PATH overrides of the sonames in
 # ffi/spec.ss (e.g. libfreetype.so.6=/opt/ft/lib/libfreetype.so.6).  Used by
@@ -33,11 +34,11 @@ all: $(BUILD)/chezterm
 
 bindings:
 	@mkdir -p $(BUILD)
-	$(C2FFI) $(C2FFI_FLAGS) -i $(FT_INC) --fail-on-error -M $(BUILD)/macros.h \
+	$(C2FFI) $(C2FFI_FLAGS) -i $(FT_INC) -i $(PIXMAN_INC) --fail-on-error -M $(BUILD)/macros.h \
 	    -o $(BUILD)/decls.json ffi/bindings.h
 	$(SCHEME) --libdirs tools --script tools/c2ffi-gen.ss macros \
 	    ffi/spec.ss $(BUILD)/macros.h $(CURDIR)/ffi/bindings.h $(BUILD)/consts.h
-	$(C2FFI) $(C2FFI_FLAGS) -i $(FT_INC) --fail-on-error -o $(BUILD)/consts.json $(BUILD)/consts.h
+	$(C2FFI) $(C2FFI_FLAGS) -i $(FT_INC) -i $(PIXMAN_INC) --fail-on-error -o $(BUILD)/consts.json $(BUILD)/consts.h
 	$(SCHEME) --libdirs tools --script tools/c2ffi-gen.ss library \
 	    ffi/spec.ss $(BUILD)/decls.json $(BUILD)/consts.json $(FFI_LIB) $(SHARED_OBJECTS)
 

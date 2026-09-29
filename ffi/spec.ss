@@ -12,7 +12,8 @@
   "libwayland-cursor.so.0"
   "libxkbcommon.so.0"
   "libfreetype.so.6"
-  "libfontconfig.so.1")
+  "libfontconfig.so.1"
+  "libpixman-1.so.0")
 
 ;; Functions to bind.  An entry is either a symbol, or
 ;; (name (param-name type) ...) to override the Scheme foreign type of
@@ -69,13 +70,17 @@
   FcPatternAddDouble FcPatternAddBool FcPatternAddCharSet FcPatternDel
   FcPatternGetString FcPatternGetInteger FcPatternGetDouble FcPatternGetBool
   FcCharSetCreate FcCharSetAddChar FcCharSetDestroy FcCharSetHasChar
-  FcPatternGetCharSet)
+  FcPatternGetCharSet
+
+  ;; pixman (compositing into the shared-memory image)
+  pixman_image_create_bits pixman_image_create_solid_fill pixman_image_unref
+  pixman_image_composite32 pixman_fill pixman_blt)
 
 ;; Structs (and everything reachable from them) to describe as ftypes.
 (structs
   FT_FaceRec_ FT_GlyphSlotRec_ FT_SizeRec_ FT_Bitmap_ FT_Matrix_ FT_Vector_
   wl_interface wl_message wl_array wl_cursor wl_cursor_image
-  pollfd winsize itimerspec timespec)
+  pollfd winsize itimerspec timespec pixman_color)
 
 (unions wl_argument)
 
@@ -83,7 +88,8 @@
 (enum-prefixes
   "FT_PIXEL_MODE_" "FT_RENDER_MODE_" "FT_LCD_FILTER_" "FT_ENCODING_NONE"
   "XKB_STATE_" "XKB_KEYMAP_FORMAT_TEXT_V1" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
-  "XKB_COMPOSE_" "XKB_KEYSYM_" "FcResult" "FcMatch")
+  "XKB_COMPOSE_" "XKB_KEYSYM_" "FcResult" "FcMatch"
+  "PIXMAN_OP_OVER" "PIXMAN_OP_SRC" "PIXMAN_a8r8g8b8" "PIXMAN_x8r8g8b8" "PIXMAN_a8")
 
 ;; Preprocessor constants, evaluated by a second c2ffi pass.
 (macros
