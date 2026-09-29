@@ -485,6 +485,15 @@
          [(string? action) (send! action)]
          [else (warn "unknown action ~s" action)])]))
 
+  (define last-bell -1000)
+
+  ;; BEL: run the configured bell command, at most every 100 ms
+  (define (ring-bell!)
+    (let ([cmd (config-ref 'bell-command)] [t (now-ms)])
+      (when (and cmd (> (- t last-bell) 100))
+        (set! last-bell t)
+        (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))
+
   (define (spawn-new-instance!)
     (let ([exe (or (getenv "CHEZTERM_EXE") "chezterm")]
           [cwd (or (terminal-cwd term) (and child-pid (process-cwd child-pid)))])
@@ -875,7 +884,7 @@ Options:
         (terminal-set-callbacks! term
           send!
           (lambda (title) (when (config-ref 'dynamic-title) (window-set-title! win title)))
-          (lambda () (void))
+          ring-bell!
           (lambda (text) (window-set-clipboard! win 'clipboard text)))
         (let ([program (or (opt 'command)
                            (let ([sh (config-ref 'shell)])

@@ -48,7 +48,7 @@
       (alternate-scroll . #t)
       (copy-on-select . #t)             ; selections go to the primary selection
       (word-separators . ",│`|:\"' ()[]{}<>\t")
-      (bell-urgent . #t)
+      (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
       (colors
        . ((foreground . "#d8d8d8")
           (background . "#181818")
@@ -117,7 +117,7 @@
                                            (cons (car c) (cadr c))
                                            (cons (car c) (cdr c))))
                            args)))]
-        [(shell) (cons key (if (equal? args '(#f)) #f args))]
+        [(shell bell-command) (cons key (if (equal? args '(#f)) #f args))]
         [(padding env) (cons key args)]
         [else (cons key (if (and (pair? args) (null? (cdr args))) (car args) args))])))
 

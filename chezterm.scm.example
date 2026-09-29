@@ -40,6 +40,10 @@
 (copy-on-select #t)              ; selections go to the primary selection
 (word-separators ",│`|:\"' ()[]{}<>\t")
 
+;;; Bell ---------------------------------------------------------------------
+(bell-command #f)                ; program run on BEL, e.g.
+                                 ; (bell-command "paplay" "/usr/share/sounds/freedesktop/stereo/bell.oga")
+
 ;;; Colors -------------------------------------------------------------------
 (bold-is-bright #f)              ; draw bold text in bright colors
 (colors
