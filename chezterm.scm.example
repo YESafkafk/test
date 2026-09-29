@@ -1,0 +1,83 @@
+;;; chezterm configuration -- copy to ~/.config/chezterm/chezterm.scm
+;;;
+;;; Every form is (option value ...).  Options not given keep their
+;;; defaults (shown here).  Any option can also be set on the command line
+;;; with -o, e.g.  chezterm -o font-size=13 -o 'padding=(8 8)'
+
+;;; Font ---------------------------------------------------------------------
+(font-family "monospace")        ; any fontconfig family name
+(font-size 11)                   ; points
+(font-bold-family #f)            ; #f: bold variant of font-family
+(font-italic-family #f)
+(dpi 96)                         ; used to convert points to pixels
+
+;;; Window -------------------------------------------------------------------
+(columns 80)                     ; initial size in cells
+(lines 24)
+(padding 2 2)                    ; horizontal, vertical (logical pixels)
+(opacity 1.0)                    ; background opacity, 0.0 - 1.0
+(title "chezterm")
+(app-id "chezterm")
+(dynamic-title #t)               ; let programs set the title (OSC 0/2)
+(decorations #t)                 ; ask for server-side decorations
+
+;;; Terminal -----------------------------------------------------------------
+(scrollback 10000)               ; lines of history
+(shell #f)                       ; #f: $SHELL; or e.g. (shell "/bin/zsh" "-l")
+(working-directory #f)
+(term "xterm-256color")          ; value of $TERM
+(env)                            ; extra variables: (env ("KEY" . "value") ...)
+
+;;; Cursor -------------------------------------------------------------------
+(cursor-style block)             ; block | underline | beam
+(cursor-blink #f)
+(cursor-blink-interval 750)      ; milliseconds
+(cursor-unfocused-hollow #t)
+
+;;; Mouse & selection --------------------------------------------------------
+(scroll-multiplier 3)            ; lines per wheel step
+(alternate-scroll #t)            ; wheel sends arrow keys in full-screen apps
+(copy-on-select #t)              ; selections go to the primary selection
+(word-separators ",│`|:\"' ()[]{}<>\t")
+
+;;; Bell ---------------------------------------------------------------------
+(bell-command #f)                ; program run on BEL, e.g.
+                                 ; (bell-command "paplay" "/usr/share/sounds/freedesktop/stereo/bell.oga")
+
+;;; Colors -------------------------------------------------------------------
+(bold-is-bright #f)              ; draw bold text in bright colors
+(colors
+ (foreground "#d8d8d8")
+ (background "#181818")
+ (cursor "#d8d8d8")
+ (selection-foreground #f)       ; #f: keep the text color
+ (selection-background "#4f4f4f")
+ (normal "#181818" "#ac4242" "#90a959" "#f4bf75"
+         "#6a9fb5" "#aa759f" "#75b5aa" "#d8d8d8")
+ (bright "#6b6b6b" "#c55555" "#aac474" "#feca88"
+         "#82b8c8" "#c28cb8" "#93d3c3" "#f8f8f8"))
+
+;;; Key bindings -------------------------------------------------------------
+;;; (bind "modifiers+key" action) where key is an xkb keysym name and the
+;;; modifiers are ctrl, shift, alt and super.  Actions:
+;;;   copy paste paste-primary increase-font-size decrease-font-size
+;;;   reset-font-size scroll-page-up scroll-page-down scroll-half-page-up
+;;;   scroll-half-page-down scroll-line-up scroll-line-down scroll-to-top
+;;;   scroll-to-bottom clear-history clear-selection reset spawn-new-instance
+;;;   toggle-fullscreen search-forward search-backward quit none
+;;; or a string, which is sent to the program as if typed.
+;;; Your bindings take precedence over the defaults:
+;;;   ctrl+shift+c copy            ctrl+shift+v paste
+;;;   shift+insert paste-primary   ctrl+insert copy
+;;;   ctrl+equal / ctrl+plus       increase-font-size
+;;;   ctrl+minus decrease-font-size   ctrl+0 reset-font-size
+;;;   shift+page_up / page_down    scroll a page
+;;;   shift+home / shift+end       scroll to top / bottom
+;;;   ctrl+shift+up / down         scroll a line
+;;;   ctrl+shift+k clear-history   ctrl+shift+n spawn-new-instance
+;;;   ctrl+shift+f search-forward  ctrl+shift+b search-backward
+;;;   f11 toggle-fullscreen
+;;
+;; (bind "ctrl+shift+t" spawn-new-instance)
+;; (bind "ctrl+shift+l" "ls -l\r")
+;; (bind "f11" none)

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=chezterm
+GenericName=Terminal
+Comment=A Wayland terminal emulator written in Chez Scheme
+Exec=chezterm
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=chezterm
