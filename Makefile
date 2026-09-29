@@ -39,10 +39,9 @@ protocols:
 # ---------------------------------------------------------------------------
 
 $(BUILD)/chezterm: $(SRC)
-	@mkdir -p $(BUILD)/lib
-	$(SCHEME) -q --libdirs src::$(BUILD)/lib --compile-imported-libraries \
-	    --optimize-level 2 < tools/build.ss
-	@printf '#!/bin/sh\nexec %s --libdirs "%s" --program "%s" "$$@"\n' \
+	@mkdir -p $(BUILD)/lib/chezterm
+	$(SCHEME) -q --libdirs src::$(BUILD)/lib --script tools/build.ss
+	@printf '#!/bin/sh\nCHEZTERM_EXE="$$0" exec %s --libdirs "%s" --program "%s" "$$@"\n' \
 	    "$(SCHEME)" "$(CURDIR)/src::$(CURDIR)/$(BUILD)/lib" "$(CURDIR)/$(BUILD)/main.so" > $@
 	@chmod +x $@
 
@@ -56,7 +55,7 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/lib/chezterm $(DESTDIR)$(PREFIX)/bin
 	cp -r $(BUILD)/lib/. $(DESTDIR)$(PREFIX)/lib/chezterm/
 	install -m644 $(BUILD)/main.so $(DESTDIR)$(PREFIX)/lib/chezterm/main.so
-	printf '#!/bin/sh\nexec %s --libdirs "%s" --program "%s" "$$@"\n' \
+	printf '#!/bin/sh\nCHEZTERM_EXE="$$0" exec %s --libdirs "%s" --program "%s" "$$@"\n' \
 	    "$(SCHEME)" "$(PREFIX)/lib/chezterm" "$(PREFIX)/lib/chezterm/main.so" \
 	    > $(DESTDIR)$(PREFIX)/bin/chezterm
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/chezterm

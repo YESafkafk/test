@@ -335,12 +335,43 @@
                   (terminal-wrap-pending-set! t #t)
                   (terminal-cursor-col-set! t (fx+ col w))))))))
 
-  ;; ASCII fast path: print printable bytes [start,end) of bv in ground state
+  ;; ASCII fast path: print the printable bytes [start,end) of bv, writing
+  ;; whole runs into the current line at once.
   (define (print-ascii-run! t bv start end)
-    (let loop ([i start])
-      (when (fx< i end)
-        (print! t (bytevector-u8-ref bv i))
-        (loop (fx+ i 1)))))
+    (if (or (terminal-insert-mode t)
+            (not (eq? (vector-ref (terminal-charsets t) (terminal-gl t)) 'ascii)))
+        (do ([i start (fx+ i 1)]) ((fx= i end))
+          (print! t (bytevector-u8-ref bv i)))
+        (let loop ([i start])
+          (when (fx< i end)
+            (if (terminal-wrap-pending t)
+                (begin (print! t (bytevector-u8-ref bv i)) (loop (fx+ i 1)))
+                (let* ([cols (terminal-cols t)]
+                       [col (terminal-cursor-col t)]
+                       [n (fxmin (fx- end i) (fx- cols col))]
+                       [l (cur-line t)]
+                       [v (line-cells l)]
+                       [attrs (fxsll (terminal-attrs t) 21)]
+                       [fg (terminal-fg t)]
+                       [bg (terminal-bg t)])
+                  (when (terminal-selection t) (touch-row! t (terminal-cursor-row t)))
+                  (fix-wide-edges! t l col (fx+ col n))
+                  (let ([ex (line-extra l)])
+                    (when ex
+                      (do ([c col (fx+ c 1)]) ((fx= c (fx+ col n)))
+                        (hashtable-delete! ex c))))
+                  (do ([k 0 (fx+ k 1)]) ((fx= k n))
+                    (let ([idx (fx* 3 (fx+ col k))])
+                      (fxvector-set! v idx (fxior (bytevector-u8-ref bv (fx+ i k)) attrs))
+                      (fxvector-set! v (fx+ idx 1) fg)
+                      (fxvector-set! v (fx+ idx 2) bg)))
+                  (terminal-last-char-set! t (bytevector-u8-ref bv (fx+ i (fx- n 1))))
+                  (if (fx>= (fx+ col n) cols)
+                      (begin
+                        (terminal-cursor-col-set! t (fx- cols 1))
+                        (terminal-wrap-pending-set! t #t))
+                      (terminal-cursor-col-set! t (fx+ col n)))
+                  (loop (fx+ i n))))))))
 
   (define (insert-blanks! t n)
     (let* ([l (cur-line t)] [v (line-cells l)] [cols (terminal-cols t)]
@@ -454,11 +485,14 @@
       (when (fx< i len)
         (let ([b (bytevector-u8-ref bv i)])
           (cond
-            ;; fast path: printable ASCII in ground state
-            [(and (eq? (terminal-state t) 'ground) (fx= 0 (terminal-utf8-need t))
-                  (fx<= 32 b 126))
-             (print! t b)
-             (loop (fx+ i 1))]
+            ;; fast path: runs of printable ASCII in ground state
+            [(and (fx<= 32 b 126) (eq? (terminal-state t) 'ground) (fx= 0 (terminal-utf8-need t)))
+             (let ([j (let scan ([j (fx+ i 1)])
+                        (if (and (fx< j len) (fx<= 32 (bytevector-u8-ref bv j) 126))
+                            (scan (fx+ j 1))
+                            j))])
+               (print-ascii-run! t bv i j)
+               (loop j))]
             [(fx= 0 (terminal-utf8-need t))
              (cond
                [(fx< b #x80) (process! t b)]
