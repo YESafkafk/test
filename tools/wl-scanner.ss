@@ -1,6 +1,7 @@
 ;;; wl-scanner.ss -- a wayland-scanner replacement emitting Chez Scheme.
 ;;;
-;;; Usage: scheme --libdirs tools --script tools/wl-scanner.ss OUT.ss PROTOCOL.xml ...
+;;; Usage: scheme --libdirs tools --script tools/wl-scanner.ss [--library NAME] OUT.ss PROTOCOL.xml ...
+;;; NAME defaults to "(chezterm protocols)".
 ;;;
 ;;; For every interface the generated library (chezterm protocols) defines
 ;;;  - an interface object (runtime descriptor, turned into a C wl_interface),
@@ -83,6 +84,8 @@
                    (string->number v)))))
        (xml-elements e 'entry)))
 
+(define library-name '(chezterm protocols))
+
 (define (main out files)
   (let* ([protos (map xml-read-file files)]
          [ifaces (apply append (map (lambda (p) (xml-elements p 'interface)) protos))]
@@ -132,7 +135,7 @@
         (for-each (lambda (f) (fprintf o ";;;   ~a~%" f)) files)
         (fprintf o ";;; Do not edit; run `make protocols` to regenerate.~%~%")
         (pretty-print
-         `(library (chezterm protocols)
+         `(library ,library-name
             (export ,@exports)
             (import (chezscheme) (chezterm wayland))
             ,@iface-defs
@@ -143,7 +146,12 @@
          o))
       'replace)))
 
-(let ([args (command-line-arguments)])
+(let ([args (let ([args (command-line-arguments)])
+              (if (and (pair? args) (equal? (car args) "--library") (pair? (cdr args)))
+                  (begin
+                    (set! library-name (read (open-input-string (cadr args))))
+                    (cddr args))
+                  args))])
   (if (< (length args) 2)
       (begin (display "usage: wl-scanner.ss OUT.ss PROTOCOL.xml ...\n") (exit 1))
       (main (car args) (cdr args))))

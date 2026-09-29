@@ -42,7 +42,7 @@ $(BUILD)/chezterm: $(SRC)
 	@mkdir -p $(BUILD)/lib/chezterm
 	$(SCHEME) -q --libdirs src::$(BUILD)/lib --script tools/build.ss
 	@printf '#!/bin/sh\nCHEZTERM_EXE="$$0" exec %s --libdirs "%s" --program "%s" "$$@"\n' \
-	    "$(SCHEME)" "$(CURDIR)/src::$(CURDIR)/$(BUILD)/lib" "$(CURDIR)/$(BUILD)/main.so" > $@
+	    "$(SCHEME)" "$(CURDIR)/$(BUILD)/lib" "$(CURDIR)/$(BUILD)/main.so" > $@
 	@chmod +x $@
 
 run: all
