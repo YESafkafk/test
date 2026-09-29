@@ -8,13 +8,14 @@
    FT_StreamDesc_ FT_StreamRec_ FT_ListNodeRec_ FT_ListRec_
    FT_FaceRec_ FT_Matrix_ wl_message wl_interface wl_array
    wl_cursor_image wl_cursor pollfd winsize timespec itimerspec
-   wl_argument malloc calloc free memcpy memset strlen c-getenv
-   setenv unsetenv setlocale wcwidth __errno_location strerror
-   c-read c-write close pipe2 fcntl poll ioctl dup2 mmap munmap
-   ftruncate memfd_create forkpty execvp _exit waitpid kill
-   getpid chdir readlink timerfd_create timerfd_settime
-   sigemptyset sigprocmask signal wl_display_connect
-   wl_display_disconnect wl_display_get_fd wl_display_dispatch
+   wl_argument malloc calloc free memcpy memmove memset strlen
+   c-getenv setenv unsetenv setlocale wcwidth __errno_location
+   strerror c-read c-write close pipe2 fcntl poll ioctl dup2
+   mmap munmap ftruncate memfd_create fork setsid forkpty
+   execvp _exit waitpid kill getpid chdir readlink
+   timerfd_create timerfd_settime sigemptyset sigprocmask
+   signal wl_display_connect wl_display_disconnect
+   wl_display_get_fd wl_display_dispatch
    wl_display_dispatch_pending wl_display_flush
    wl_display_roundtrip wl_display_prepare_read
    wl_display_read_events wl_display_cancel_read
@@ -28,6 +29,7 @@
    xkb_state_new xkb_state_unref xkb_state_update_mask
    xkb_state_key_get_one_sym xkb_state_key_get_utf32
    xkb_state_mod_index_is_active xkb_keysym_to_utf32
+   xkb_keysym_to_lower xkb_keysym_from_name xkb_keysym_get_name
    xkb_compose_table_new_from_locale xkb_compose_table_unref
    xkb_compose_state_new xkb_compose_state_unref
    xkb_compose_state_feed xkb_compose_state_reset
@@ -36,6 +38,7 @@
    FT_New_Face FT_Done_Face FT_Set_Pixel_Sizes FT_Select_Size
    FT_Get_Char_Index FT_Load_Glyph FT_Render_Glyph
    FT_Library_SetLcdFilter FT_Set_Transform
+   FT_GlyphSlot_Embolden FT_GlyphSlot_Oblique
    FcInitLoadConfigAndFonts FcConfigDestroy FcConfigSubstitute
    FcDefaultSubstitute FcFontMatch FcNameParse FcPatternCreate
    FcPatternDestroy FcPatternDuplicate FcPatternAddString
@@ -43,7 +46,8 @@
    FcPatternAddCharSet FcPatternDel FcPatternGetString
    FcPatternGetInteger FcPatternGetDouble FcPatternGetBool
    FcCharSetCreate FcCharSetAddChar FcCharSetDestroy
-   FcCharSetHasChar FcPatternGetCharSet XKB_CONTEXT_NO_FLAGS
+   FcCharSetHasChar FcPatternGetCharSet XKB_KEYSYM_NO_FLAGS
+   XKB_KEYSYM_CASE_INSENSITIVE XKB_CONTEXT_NO_FLAGS
    XKB_KEYMAP_COMPILE_NO_FLAGS XKB_KEYMAP_FORMAT_TEXT_V1
    XKB_STATE_MODS_DEPRESSED XKB_STATE_MODS_LATCHED
    XKB_STATE_MODS_LOCKED XKB_STATE_MODS_EFFECTIVE
@@ -65,24 +69,23 @@
    FT_LCD_FILTER_LEGACY1 FT_LCD_FILTER_LEGACY FT_LCD_FILTER_MAX
    FcResultMatch FcResultNoMatch FcResultTypeMismatch
    FcResultNoId FcResultOutOfMemory FcMatchPattern FcMatchFont
-   FcMatchScan FcMatchKindEnd FcMatchKindBegin FT_LOAD_DEFAULT
-   FT_LOAD_NO_HINTING FT_LOAD_NO_BITMAP FT_LOAD_RENDER
-   FT_LOAD_FORCE_AUTOHINT FT_LOAD_COLOR FT_LOAD_TARGET_NORMAL
-   FT_LOAD_TARGET_LIGHT FT_LOAD_TARGET_LCD FT_LOAD_TARGET_MONO
-   POLLIN POLLOUT CLOCK_MONOTONIC POLLNVAL POLLERR POLLHUP
-   SIGHUP SIGTERM SIGINT WL_MARSHAL_FLAG_DESTROY WNOHANG
-   FT_FACE_FLAG_SCALABLE FT_FACE_FLAG_FIXED_SIZES
-   FT_FACE_FLAG_COLOR FC_MONO FC_RGBA_RGB FC_WEIGHT_BOLD
-   FC_RGBA_NONE FC_SLANT_ITALIC FC_RGBA_UNKNOWN FC_SLANT_ROMAN
-   FC_RGBA_BGR SIG_SETMASK MAP_SHARED PROT_READ PROT_WRITE
-   MFD_ALLOW_SEALING MFD_CLOEXEC EINTR EIO FcTrue FcFalse
-   FC_COLOR FC_INDEX FC_SCALABLE FC_CHARSET FC_RGBA
-   FC_PIXEL_SIZE FC_SPACING FC_SIZE FC_STYLE FC_FILE FC_WEIGHT
-   FC_HINTING FC_ANTIALIAS FC_HINT_STYLE FC_SLANT
-   FC_WEIGHT_REGULAR FC_FAMILY FC_DPI O_CLOEXEC F_SETFD
-   O_NONBLOCK FD_CLOEXEC F_SETFL F_GETFL TIOCSWINSZ TIOCGPGRP
-   SIGCHLD SIGPIPE LC_CTYPE LC_ALL EAGAIN TFD_NONBLOCK
-   TFD_CLOEXEC)
+   FcMatchScan FcMatchKindEnd FcMatchKindBegin CLOCK_MONOTONIC
+   FT_LOAD_FORCE_AUTOHINT FT_LOAD_RENDER FT_LOAD_NO_HINTING
+   FT_LOAD_NO_BITMAP FT_LOAD_DEFAULT FT_LOAD_TARGET_NORMAL
+   FT_LOAD_TARGET_LIGHT FT_LOAD_COLOR FT_LOAD_TARGET_LCD
+   FT_LOAD_TARGET_MONO PROT_READ PROT_WRITE MAP_SHARED
+   MFD_CLOEXEC MFD_ALLOW_SEALING SIGTERM SIGHUP SIGINT POLLHUP
+   POLLNVAL POLLERR POLLIN POLLOUT WL_MARSHAL_FLAG_DESTROY
+   LC_CTYPE LC_ALL TFD_NONBLOCK TFD_CLOEXEC EAGAIN EPIPE
+   SIGCHLD SIGPIPE FD_CLOEXEC F_SETFL F_SETFD F_GETFL O_CLOEXEC
+   O_NONBLOCK WNOHANG EINTR ENOENT EIO FT_FACE_FLAG_SCALABLE
+   FT_FACE_FLAG_FIXED_SIZES FT_FACE_FLAG_COLOR TIOCGPGRP
+   TIOCSWINSZ FC_RGBA_NONE FC_RGBA_BGR FC_RGBA_RGB SIG_SETMASK
+   FC_SLANT_ROMAN FC_SLANT_ITALIC FC_WEIGHT_REGULAR
+   FC_WEIGHT_BOLD FC_RGBA_UNKNOWN FC_CHARSET FC_DPI FC_RGBA
+   FC_MONO FC_COLOR FC_SCALABLE FC_INDEX FC_FILE FC_HINT_STYLE
+   FC_SPACING FC_ANTIALIAS FC_HINTING FC_SLANT FC_SIZE
+   FC_WEIGHT FC_PIXEL_SIZE FcTrue FcFalse FC_FAMILY FC_STYLE)
   (import (chezscheme))
   (define shared-objects-loaded
     (begin
@@ -297,6 +300,10 @@
   (define free (foreign-procedure "free" (uptr) void))
   (define memcpy
     (foreign-procedure "memcpy" (uptr uptr unsigned-long) uptr))
+  (define memmove
+    (foreign-procedure "memmove"
+      (uptr uptr unsigned-long)
+      uptr))
   (define memset
     (foreign-procedure "memset" (uptr int unsigned-long) uptr))
   (define strlen
@@ -333,19 +340,20 @@
     (foreign-procedure "ftruncate" (int long) int))
   (define memfd_create
     (foreign-procedure "memfd_create" (utf-8 unsigned-int) int))
+  (define fork (foreign-procedure "fork" () int))
+  (define setsid (foreign-procedure "setsid" () int))
   (define forkpty
-    (foreign-procedure "forkpty" (uptr utf-8 uptr uptr) int))
-  (define execvp
-    (foreign-procedure "execvp" (utf-8 uptr) int))
+    (foreign-procedure "forkpty" (uptr uptr uptr uptr) int))
+  (define execvp (foreign-procedure "execvp" (uptr uptr) int))
   (define _exit (foreign-procedure "_exit" (int) void))
   (define waitpid
     (foreign-procedure "waitpid" (int uptr int) int))
   (define kill (foreign-procedure "kill" (int int) int))
   (define getpid (foreign-procedure "getpid" () int))
-  (define chdir (foreign-procedure "chdir" (utf-8) int))
+  (define chdir (foreign-procedure "chdir" (uptr) int))
   (define readlink
     (foreign-procedure "readlink"
-      (utf-8 utf-8 unsigned-long)
+      (utf-8 uptr unsigned-long)
       long))
   (define timerfd_create
     (foreign-procedure "timerfd_create" (int int) int))
@@ -420,7 +428,7 @@
     (foreign-procedure "xkb_context_unref" (uptr) void))
   (define xkb_keymap_new_from_string
     (foreign-procedure "xkb_keymap_new_from_string"
-      (uptr utf-8 int int)
+      (uptr uptr int int)
       uptr))
   (define xkb_keymap_unref
     (foreign-procedure "xkb_keymap_unref" (uptr) void))
@@ -462,6 +470,18 @@
     (foreign-procedure "xkb_keysym_to_utf32"
       (unsigned-int)
       unsigned-int))
+  (define xkb_keysym_to_lower
+    (foreign-procedure "xkb_keysym_to_lower"
+      (unsigned-int)
+      unsigned-int))
+  (define xkb_keysym_from_name
+    (foreign-procedure "xkb_keysym_from_name"
+      (utf-8 int)
+      unsigned-int))
+  (define xkb_keysym_get_name
+    (foreign-procedure "xkb_keysym_get_name"
+      (unsigned-int utf-8 unsigned-long)
+      int))
   (define xkb_compose_table_new_from_locale
     (foreign-procedure "xkb_compose_table_new_from_locale"
       (uptr utf-8 int)
@@ -488,7 +508,7 @@
       unsigned-int))
   (define xkb_compose_state_get_utf8
     (foreign-procedure "xkb_compose_state_get_utf8"
-      (uptr utf-8 unsigned-long)
+      (uptr uptr unsigned-long)
       int))
   (define FT_Init_FreeType
     (foreign-procedure "FT_Init_FreeType" (uptr) int))
@@ -524,6 +544,10 @@
     (foreign-procedure "FT_Set_Transform"
       (uptr uptr uptr)
       void))
+  (define FT_GlyphSlot_Embolden
+    (foreign-procedure "FT_GlyphSlot_Embolden" (uptr) void))
+  (define FT_GlyphSlot_Oblique
+    (foreign-procedure "FT_GlyphSlot_Oblique" (uptr) void))
   (define FcInitLoadConfigAndFonts
     (foreign-procedure "FcInitLoadConfigAndFonts" () uptr))
   (define FcConfigDestroy
@@ -596,6 +620,8 @@
     (foreign-procedure "FcPatternGetCharSet"
       (uptr utf-8 int uptr)
       int))
+  (define XKB_KEYSYM_NO_FLAGS 0)
+  (define XKB_KEYSYM_CASE_INSENSITIVE 1)
   (define XKB_CONTEXT_NO_FLAGS 0)
   (define XKB_KEYMAP_COMPILE_NO_FLAGS 0)
   (define XKB_KEYMAP_FORMAT_TEXT_V1 1)
@@ -653,78 +679,80 @@
   (define FcMatchScan 2)
   (define FcMatchKindEnd 3)
   (define FcMatchKindBegin 0)
-  (define FT_LOAD_DEFAULT 0)
+  (define CLOCK_MONOTONIC 1)
+  (define FT_LOAD_FORCE_AUTOHINT 32)
+  (define FT_LOAD_RENDER 4)
   (define FT_LOAD_NO_HINTING 2)
   (define FT_LOAD_NO_BITMAP 8)
-  (define FT_LOAD_RENDER 4)
-  (define FT_LOAD_FORCE_AUTOHINT 32)
-  (define FT_LOAD_COLOR 1048576)
+  (define FT_LOAD_DEFAULT 0)
   (define FT_LOAD_TARGET_NORMAL 0)
   (define FT_LOAD_TARGET_LIGHT 65536)
+  (define FT_LOAD_COLOR 1048576)
   (define FT_LOAD_TARGET_LCD 196608)
   (define FT_LOAD_TARGET_MONO 131072)
-  (define POLLIN 1)
-  (define POLLOUT 4)
-  (define CLOCK_MONOTONIC 1)
+  (define PROT_READ 1)
+  (define PROT_WRITE 2)
+  (define MAP_SHARED 1)
+  (define MFD_CLOEXEC 1)
+  (define MFD_ALLOW_SEALING 2)
+  (define SIGTERM 15)
+  (define SIGHUP 1)
+  (define SIGINT 2)
+  (define POLLHUP 16)
   (define POLLNVAL 32)
   (define POLLERR 8)
-  (define POLLHUP 16)
-  (define SIGHUP 1)
-  (define SIGTERM 15)
-  (define SIGINT 2)
+  (define POLLIN 1)
+  (define POLLOUT 4)
   (define WL_MARSHAL_FLAG_DESTROY 1)
+  (define LC_CTYPE 0)
+  (define LC_ALL 6)
+  (define TFD_NONBLOCK 2048)
+  (define TFD_CLOEXEC 524288)
+  (define EAGAIN 11)
+  (define EPIPE 32)
+  (define SIGCHLD 17)
+  (define SIGPIPE 13)
+  (define FD_CLOEXEC 1)
+  (define F_SETFL 4)
+  (define F_SETFD 2)
+  (define F_GETFL 3)
+  (define O_CLOEXEC 524288)
+  (define O_NONBLOCK 2048)
   (define WNOHANG 1)
+  (define EINTR 4)
+  (define ENOENT 2)
+  (define EIO 5)
   (define FT_FACE_FLAG_SCALABLE 1)
   (define FT_FACE_FLAG_FIXED_SIZES 2)
   (define FT_FACE_FLAG_COLOR 16384)
-  (define FC_MONO 100)
-  (define FC_RGBA_RGB 1)
-  (define FC_WEIGHT_BOLD 200)
+  (define TIOCGPGRP 21519)
+  (define TIOCSWINSZ 21524)
   (define FC_RGBA_NONE 5)
-  (define FC_SLANT_ITALIC 100)
-  (define FC_RGBA_UNKNOWN 0)
-  (define FC_SLANT_ROMAN 0)
   (define FC_RGBA_BGR 2)
+  (define FC_RGBA_RGB 1)
   (define SIG_SETMASK 2)
-  (define MAP_SHARED 1)
-  (define PROT_READ 1)
-  (define PROT_WRITE 2)
-  (define MFD_ALLOW_SEALING 2)
-  (define MFD_CLOEXEC 1)
-  (define EINTR 4)
-  (define EIO 5)
+  (define FC_SLANT_ROMAN 0)
+  (define FC_SLANT_ITALIC 100)
+  (define FC_WEIGHT_REGULAR 80)
+  (define FC_WEIGHT_BOLD 200)
+  (define FC_RGBA_UNKNOWN 0)
+  (define FC_CHARSET "charset")
+  (define FC_DPI "dpi")
+  (define FC_RGBA "rgba")
+  (define FC_MONO 100)
+  (define FC_COLOR "color")
+  (define FC_SCALABLE "scalable")
+  (define FC_INDEX "index")
+  (define FC_FILE "file")
+  (define FC_HINT_STYLE "hintstyle")
+  (define FC_SPACING "spacing")
+  (define FC_ANTIALIAS "antialias")
+  (define FC_HINTING "hinting")
+  (define FC_SLANT "slant")
+  (define FC_SIZE "size")
+  (define FC_WEIGHT "weight")
+  (define FC_PIXEL_SIZE "pixelsize")
   (define FcTrue 1)
   (define FcFalse 0)
-  (define FC_COLOR "color")
-  (define FC_INDEX "index")
-  (define FC_SCALABLE "scalable")
-  (define FC_CHARSET "charset")
-  (define FC_RGBA "rgba")
-  (define FC_PIXEL_SIZE "pixelsize")
-  (define FC_SPACING "spacing")
-  (define FC_SIZE "size")
-  (define FC_STYLE "style")
-  (define FC_FILE "file")
-  (define FC_WEIGHT "weight")
-  (define FC_HINTING "hinting")
-  (define FC_ANTIALIAS "antialias")
-  (define FC_HINT_STYLE "hintstyle")
-  (define FC_SLANT "slant")
-  (define FC_WEIGHT_REGULAR 80)
   (define FC_FAMILY "family")
-  (define FC_DPI "dpi")
-  (define O_CLOEXEC 524288)
-  (define F_SETFD 2)
-  (define O_NONBLOCK 2048)
-  (define FD_CLOEXEC 1)
-  (define F_SETFL 4)
-  (define F_GETFL 3)
-  (define TIOCSWINSZ 21524)
-  (define TIOCGPGRP 21519)
-  (define SIGCHLD 17)
-  (define SIGPIPE 13)
-  (define LC_CTYPE 0)
-  (define LC_ALL 6)
-  (define EAGAIN 11)
-  (define TFD_NONBLOCK 2048)
-  (define TFD_CLOEXEC 524288))
+  (define FC_STYLE "style"))

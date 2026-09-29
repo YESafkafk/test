@@ -22,12 +22,13 @@
 ;; types of the extra arguments they are called with.
 (functions
   ;; libc
-  malloc calloc free memcpy memset (strlen (__s uptr)) getenv setenv unsetenv
+  malloc calloc free memcpy memmove memset (strlen (__s uptr)) getenv setenv unsetenv
   setlocale wcwidth __errno_location strerror
   (read (__buf u8*)) (write (__buf u8*))
   close pipe2 (fcntl (&rest int)) poll (ioctl (&rest uptr)) dup2
   mmap munmap ftruncate memfd_create
-  forkpty execvp _exit waitpid kill getpid chdir readlink
+  fork setsid (forkpty (__name uptr)) (execvp (__file uptr)) _exit waitpid kill getpid
+  (chdir (__path uptr)) (readlink (__buf uptr))
   timerfd_create timerfd_settime
   sigemptyset sigprocmask signal
 
@@ -45,20 +46,21 @@
 
   ;; xkbcommon
   xkb_context_new xkb_context_unref
-  xkb_keymap_new_from_string xkb_keymap_unref xkb_keymap_key_repeats
+  (xkb_keymap_new_from_string (string uptr)) xkb_keymap_unref xkb_keymap_key_repeats
   xkb_keymap_mod_get_index
   xkb_state_new xkb_state_unref xkb_state_update_mask
   xkb_state_key_get_one_sym xkb_state_key_get_utf32 xkb_state_mod_index_is_active
-  xkb_keysym_to_utf32
+  xkb_keysym_to_utf32 xkb_keysym_to_lower xkb_keysym_from_name xkb_keysym_get_name
   xkb_compose_table_new_from_locale xkb_compose_table_unref
   xkb_compose_state_new xkb_compose_state_unref xkb_compose_state_feed
   xkb_compose_state_reset xkb_compose_state_get_status
-  xkb_compose_state_get_one_sym xkb_compose_state_get_utf8
+  xkb_compose_state_get_one_sym (xkb_compose_state_get_utf8 (buffer uptr))
 
   ;; freetype
   FT_Init_FreeType FT_Done_FreeType FT_New_Face FT_Done_Face
   FT_Set_Pixel_Sizes FT_Select_Size FT_Get_Char_Index FT_Load_Glyph
   FT_Render_Glyph FT_Library_SetLcdFilter FT_Set_Transform
+  FT_GlyphSlot_Embolden FT_GlyphSlot_Oblique
 
   ;; fontconfig
   FcInitLoadConfigAndFonts FcConfigDestroy FcConfigSubstitute
@@ -81,7 +83,7 @@
 (enum-prefixes
   "FT_PIXEL_MODE_" "FT_RENDER_MODE_" "FT_LCD_FILTER_" "FT_ENCODING_NONE"
   "XKB_STATE_" "XKB_KEYMAP_FORMAT_" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
-  "XKB_COMPOSE_" "FcResult" "FcMatch")
+  "XKB_COMPOSE_" "XKB_KEYSYM_" "FcResult" "FcMatch")
 
 ;; Preprocessor constants, evaluated by a second c2ffi pass.
 (macros
@@ -91,7 +93,7 @@
   PROT_READ PROT_WRITE MAP_SHARED MFD_CLOEXEC MFD_ALLOW_SEALING
   TIOCSWINSZ TIOCGPGRP WNOHANG SIGCHLD SIGHUP SIGPIPE SIGINT SIGTERM
   SIG_SETMASK LC_ALL LC_CTYPE
-  CLOCK_MONOTONIC TFD_NONBLOCK TFD_CLOEXEC
+  CLOCK_MONOTONIC TFD_NONBLOCK TFD_CLOEXEC ENOENT EPIPE
   ;; wayland
   WL_MARSHAL_FLAG_DESTROY
   ;; freetype
