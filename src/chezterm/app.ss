@@ -752,8 +752,9 @@ Options:
      opts))
 
   (define overrides '())
-  (define (set-config-override! k v) (set! overrides (cons (cons k v) overrides)))
-  (define (option k) (let ([e (assq k overrides)]) (if e (cdr e) (config-ref k))))
+  (define (set-config-override! k v)
+    ;; KEY=(a b) means the config form (KEY a b), KEY=x means (KEY x)
+    (set! overrides (cons (config-normalize (cons k (if (list? v) v (list v)))) overrides)))
 
   ;;; Entry point ----------------------------------------------------------------------------
 
@@ -824,9 +825,16 @@ Options:
                                                          (config-ref 'env))))])
             (set! pty-fd fd)
             (set! child-pid pid)))
-        (main-loop!)
-        (when (and pty-fd (not child-exited)) (pty-hangup! pty-fd child-pid))
-        (window-close! win))))
+        (let ([ok (guard (e [#t (let ([p (current-error-port)])
+                                  (display "chezterm: fatal error: " p)
+                                  (display-condition e p)
+                                  (newline p))
+                                #f])
+                    (main-loop!)
+                    #t)])
+          (when (and pty-fd (not child-exited)) (pty-hangup! pty-fd child-pid))
+          (window-close! win)
+          (unless ok (exit 1))))))
 
   (define (install-overrides!)
     ;; make command-line overrides visible through config-ref

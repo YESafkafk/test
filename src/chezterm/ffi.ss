@@ -70,22 +70,23 @@
    FcResultMatch FcResultNoMatch FcResultTypeMismatch
    FcResultNoId FcResultOutOfMemory FcMatchPattern FcMatchFont
    FcMatchScan FcMatchKindEnd FcMatchKindBegin CLOCK_MONOTONIC
-   FT_LOAD_FORCE_AUTOHINT FT_LOAD_RENDER FT_LOAD_NO_HINTING
-   FT_LOAD_NO_BITMAP FT_LOAD_DEFAULT FT_LOAD_TARGET_NORMAL
-   FT_LOAD_TARGET_LIGHT FT_LOAD_COLOR FT_LOAD_TARGET_LCD
-   FT_LOAD_TARGET_MONO PROT_READ PROT_WRITE MAP_SHARED
-   MFD_CLOEXEC MFD_ALLOW_SEALING SIGTERM SIGHUP SIGINT POLLHUP
-   POLLNVAL POLLERR POLLIN POLLOUT WL_MARSHAL_FLAG_DESTROY
-   LC_CTYPE LC_ALL TFD_NONBLOCK TFD_CLOEXEC EAGAIN EPIPE
-   SIGCHLD SIGPIPE FD_CLOEXEC F_SETFL F_SETFD F_GETFL O_CLOEXEC
-   O_NONBLOCK WNOHANG EINTR ENOENT EIO FT_FACE_FLAG_SCALABLE
-   FT_FACE_FLAG_FIXED_SIZES FT_FACE_FLAG_COLOR TIOCGPGRP
-   TIOCSWINSZ FC_RGBA_NONE FC_RGBA_BGR FC_RGBA_RGB SIG_SETMASK
-   FC_SLANT_ROMAN FC_SLANT_ITALIC FC_WEIGHT_REGULAR
-   FC_WEIGHT_BOLD FC_RGBA_UNKNOWN FC_CHARSET FC_DPI FC_RGBA
-   FC_MONO FC_COLOR FC_SCALABLE FC_INDEX FC_FILE FC_HINT_STYLE
-   FC_SPACING FC_ANTIALIAS FC_HINTING FC_SLANT FC_SIZE
-   FC_WEIGHT FC_PIXEL_SIZE FcTrue FcFalse FC_FAMILY FC_STYLE)
+   EAGAIN EINTR EIO ENOENT EPIPE FC_ANTIALIAS FC_CHARSET
+   FC_COLOR FC_DPI FC_FAMILY FC_FILE FC_HINTING FC_HINT_STYLE
+   FC_INDEX FC_MONO FC_PIXEL_SIZE FC_RGBA FC_RGBA_BGR
+   FC_RGBA_NONE FC_RGBA_RGB FC_RGBA_UNKNOWN FC_SCALABLE FC_SIZE
+   FC_SLANT FC_SLANT_ITALIC FC_SLANT_ROMAN FC_SPACING FC_STYLE
+   FC_WEIGHT FC_WEIGHT_BOLD FC_WEIGHT_REGULAR FD_CLOEXEC
+   FT_FACE_FLAG_COLOR FT_FACE_FLAG_FIXED_SIZES
+   FT_FACE_FLAG_SCALABLE FT_LOAD_COLOR FT_LOAD_DEFAULT
+   FT_LOAD_FORCE_AUTOHINT FT_LOAD_NO_BITMAP FT_LOAD_NO_HINTING
+   FT_LOAD_RENDER FT_LOAD_TARGET_LCD FT_LOAD_TARGET_LIGHT
+   FT_LOAD_TARGET_MONO FT_LOAD_TARGET_NORMAL F_GETFL F_SETFD
+   F_SETFL FcFalse FcTrue LC_ALL LC_CTYPE MAP_SHARED
+   MFD_ALLOW_SEALING MFD_CLOEXEC O_CLOEXEC O_NONBLOCK POLLERR
+   POLLHUP POLLIN POLLNVAL POLLOUT PROT_READ PROT_WRITE SIGCHLD
+   SIGHUP SIGINT SIGPIPE SIGTERM SIG_SETMASK TFD_CLOEXEC
+   TFD_NONBLOCK TIOCGPGRP TIOCSWINSZ WL_MARSHAL_FLAG_DESTROY
+   WNOHANG)
   (import (chezscheme))
   (define shared-objects-loaded
     (begin
@@ -680,79 +681,79 @@
   (define FcMatchKindEnd 3)
   (define FcMatchKindBegin 0)
   (define CLOCK_MONOTONIC 1)
-  (define FT_LOAD_FORCE_AUTOHINT 32)
-  (define FT_LOAD_RENDER 4)
-  (define FT_LOAD_NO_HINTING 2)
-  (define FT_LOAD_NO_BITMAP 8)
-  (define FT_LOAD_DEFAULT 0)
-  (define FT_LOAD_TARGET_NORMAL 0)
-  (define FT_LOAD_TARGET_LIGHT 65536)
-  (define FT_LOAD_COLOR 1048576)
-  (define FT_LOAD_TARGET_LCD 196608)
-  (define FT_LOAD_TARGET_MONO 131072)
-  (define PROT_READ 1)
-  (define PROT_WRITE 2)
-  (define MAP_SHARED 1)
-  (define MFD_CLOEXEC 1)
-  (define MFD_ALLOW_SEALING 2)
-  (define SIGTERM 15)
-  (define SIGHUP 1)
-  (define SIGINT 2)
-  (define POLLHUP 16)
-  (define POLLNVAL 32)
-  (define POLLERR 8)
-  (define POLLIN 1)
-  (define POLLOUT 4)
-  (define WL_MARSHAL_FLAG_DESTROY 1)
-  (define LC_CTYPE 0)
-  (define LC_ALL 6)
-  (define TFD_NONBLOCK 2048)
-  (define TFD_CLOEXEC 524288)
   (define EAGAIN 11)
+  (define EINTR 4)
+  (define EIO 5)
+  (define ENOENT 2)
   (define EPIPE 32)
-  (define SIGCHLD 17)
-  (define SIGPIPE 13)
+  (define FC_ANTIALIAS "antialias")
+  (define FC_CHARSET "charset")
+  (define FC_COLOR "color")
+  (define FC_DPI "dpi")
+  (define FC_FAMILY "family")
+  (define FC_FILE "file")
+  (define FC_HINTING "hinting")
+  (define FC_HINT_STYLE "hintstyle")
+  (define FC_INDEX "index")
+  (define FC_MONO 100)
+  (define FC_PIXEL_SIZE "pixelsize")
+  (define FC_RGBA "rgba")
+  (define FC_RGBA_BGR 2)
+  (define FC_RGBA_NONE 5)
+  (define FC_RGBA_RGB 1)
+  (define FC_RGBA_UNKNOWN 0)
+  (define FC_SCALABLE "scalable")
+  (define FC_SIZE "size")
+  (define FC_SLANT "slant")
+  (define FC_SLANT_ITALIC 100)
+  (define FC_SLANT_ROMAN 0)
+  (define FC_SPACING "spacing")
+  (define FC_STYLE "style")
+  (define FC_WEIGHT "weight")
+  (define FC_WEIGHT_BOLD 200)
+  (define FC_WEIGHT_REGULAR 80)
   (define FD_CLOEXEC 1)
-  (define F_SETFL 4)
-  (define F_SETFD 2)
+  (define FT_FACE_FLAG_COLOR 16384)
+  (define FT_FACE_FLAG_FIXED_SIZES 2)
+  (define FT_FACE_FLAG_SCALABLE 1)
+  (define FT_LOAD_COLOR 1048576)
+  (define FT_LOAD_DEFAULT 0)
+  (define FT_LOAD_FORCE_AUTOHINT 32)
+  (define FT_LOAD_NO_BITMAP 8)
+  (define FT_LOAD_NO_HINTING 2)
+  (define FT_LOAD_RENDER 4)
+  (define FT_LOAD_TARGET_LCD 196608)
+  (define FT_LOAD_TARGET_LIGHT 65536)
+  (define FT_LOAD_TARGET_MONO 131072)
+  (define FT_LOAD_TARGET_NORMAL 0)
   (define F_GETFL 3)
+  (define F_SETFD 2)
+  (define F_SETFL 4)
+  (define FcFalse 0)
+  (define FcTrue 1)
+  (define LC_ALL 6)
+  (define LC_CTYPE 0)
+  (define MAP_SHARED 1)
+  (define MFD_ALLOW_SEALING 2)
+  (define MFD_CLOEXEC 1)
   (define O_CLOEXEC 524288)
   (define O_NONBLOCK 2048)
-  (define WNOHANG 1)
-  (define EINTR 4)
-  (define ENOENT 2)
-  (define EIO 5)
-  (define FT_FACE_FLAG_SCALABLE 1)
-  (define FT_FACE_FLAG_FIXED_SIZES 2)
-  (define FT_FACE_FLAG_COLOR 16384)
+  (define POLLERR 8)
+  (define POLLHUP 16)
+  (define POLLIN 1)
+  (define POLLNVAL 32)
+  (define POLLOUT 4)
+  (define PROT_READ 1)
+  (define PROT_WRITE 2)
+  (define SIGCHLD 17)
+  (define SIGHUP 1)
+  (define SIGINT 2)
+  (define SIGPIPE 13)
+  (define SIGTERM 15)
+  (define SIG_SETMASK 2)
+  (define TFD_CLOEXEC 524288)
+  (define TFD_NONBLOCK 2048)
   (define TIOCGPGRP 21519)
   (define TIOCSWINSZ 21524)
-  (define FC_RGBA_NONE 5)
-  (define FC_RGBA_BGR 2)
-  (define FC_RGBA_RGB 1)
-  (define SIG_SETMASK 2)
-  (define FC_SLANT_ROMAN 0)
-  (define FC_SLANT_ITALIC 100)
-  (define FC_WEIGHT_REGULAR 80)
-  (define FC_WEIGHT_BOLD 200)
-  (define FC_RGBA_UNKNOWN 0)
-  (define FC_CHARSET "charset")
-  (define FC_DPI "dpi")
-  (define FC_RGBA "rgba")
-  (define FC_MONO 100)
-  (define FC_COLOR "color")
-  (define FC_SCALABLE "scalable")
-  (define FC_INDEX "index")
-  (define FC_FILE "file")
-  (define FC_HINT_STYLE "hintstyle")
-  (define FC_SPACING "spacing")
-  (define FC_ANTIALIAS "antialias")
-  (define FC_HINTING "hinting")
-  (define FC_SLANT "slant")
-  (define FC_SIZE "size")
-  (define FC_WEIGHT "weight")
-  (define FC_PIXEL_SIZE "pixelsize")
-  (define FcTrue 1)
-  (define FcFalse 0)
-  (define FC_FAMILY "family")
-  (define FC_STYLE "style"))
+  (define WL_MARSHAL_FLAG_DESTROY 1)
+  (define WNOHANG 1))

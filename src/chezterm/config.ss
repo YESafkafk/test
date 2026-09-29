@@ -11,7 +11,7 @@
 ;;; See chezterm.scm.example for all options.
 (library (chezterm config)
   (export load-config config-ref config-path parse-hex-color default-config
-          set-config-overrides!)
+          set-config-overrides! config-normalize)
   (import (chezscheme))
 
   (define (parse-hex-color s)
@@ -103,6 +103,8 @@
                  (cons o (remp (lambda (e) (eq? (car e) (car o))) acc)))
                base overrides))
 
+  (define (config-normalize form) (normalize form))
+
   (define (normalize form)
     ;; (option v) -> (option . v); (option v1 v2 ...) -> (option . (v1 v2 ...))
     (let ([key (car form)] [args (cdr form)])
@@ -115,7 +117,8 @@
                                            (cons (car c) (cadr c))
                                            (cons (car c) (cdr c))))
                            args)))]
-        [(padding shell env) (cons key args)]
+        [(shell) (cons key (if (equal? args '(#f)) #f args))]
+        [(padding env) (cons key args)]
         [else (cons key (if (and (pair? args) (null? (cdr args))) (car args) args))])))
 
   (define (load-config path)

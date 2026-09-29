@@ -302,8 +302,10 @@
 (define (gen-library spec-path decls-path consts-path out-path)
   (let* ([spec (read-spec spec-path)]
          [decls (json-read-file decls-path)]
-         [consts (filter (lambda (d) (equal? (jref d "tag") "const"))
-                         (json-read-file consts-path))])
+         ;; c2ffi emits macros in hash order; sort for reproducible output
+         [consts (list-sort (lambda (a b) (string<? (jref a "name") (jref b "name")))
+                            (filter (lambda (d) (equal? (jref d "tag") "const"))
+                                    (json-read-file consts-path)))])
     (index-decls! decls)
     (for-each (lambda (s) (request-ftype! (symbol->string s)))
               (append (spec-ref spec 'structs) (spec-ref spec 'unions)))

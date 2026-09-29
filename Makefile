@@ -59,6 +59,8 @@ install: all
 	    "$(SCHEME)" "$(PREFIX)/lib/chezterm" "$(PREFIX)/lib/chezterm/main.so" \
 	    > $(DESTDIR)$(PREFIX)/bin/chezterm
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/chezterm
+	install -Dm644 chezterm.desktop $(DESTDIR)$(PREFIX)/share/applications/chezterm.desktop
+	install -Dm644 chezterm.scm.example $(DESTDIR)$(PREFIX)/share/doc/chezterm/chezterm.scm.example
 
 clean:
 	rm -rf $(BUILD)
