@@ -49,6 +49,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
+- Optional `bell-command` run on BEL.
 - Incremental software rendering into shared-memory buffers: only changed
   rows are redrawn, scrolling moves pixels instead of redrawing, and only
   changed regions are reported to the compositor. Rendering is paced by frame
@@ -78,7 +79,8 @@ apt install libwayland-dev libxkbcommon-dev libfreetype-dev libfontconfig-dev
 make            # compiles everything into build/, creates build/chezterm
 build/chezterm
 make install    # PREFIX=/usr/local by default
-make test       # headless test suite (terminal, selection, keys, renderer)
+make test       # headless test suite (terminal, selection, keys, renderer),
+                # run against the sources and against the optimized build
 ```
 
 ```
