@@ -1,0 +1,294 @@
+;;; Test runner: scheme --libdirs src --script tests/run.ss
+(import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth))
+
+(define failures 0)
+(define passes 0)
+
+(define-syntax check
+  (syntax-rules ()
+    [(_ name expected expr)
+     (let ([e expected] [v (guard (c [#t (list 'exception (condition-message-string c))]) expr)])
+       (if (equal? e v)
+           (set! passes (+ passes 1))
+           (begin
+             (set! failures (+ failures 1))
+             (printf "FAIL ~a\n  expected: ~s\n  got:      ~s\n" name e v))))]))
+
+(define (condition-message-string c)
+  (if (message-condition? c)
+      (apply format (condition-message c)
+             (if (irritants-condition? c) (condition-irritants c) '()))
+      (format "~s" c)))
+
+(init-charwidth!)
+
+(define palette
+  (make-default-palette (make-list 8 0) (make-list 8 0) #xffffff 0 #xffffff))
+
+(define responses '())
+
+(define (make-term rows cols . hist)
+  (let ([t (make-terminal rows cols (if (pair? hist) (car hist) 100) palette 'block #f)])
+    (set! responses '())
+    (terminal-set-callbacks! t
+      (lambda (s) (set! responses (cons s responses)))
+      (lambda (s) (void)) (lambda () (void)) (lambda (s) (void)))
+    t))
+
+(define (feed t . strs)
+  (let ([bv (string->utf8 (apply string-append strs))])
+    (terminal-feed! t bv (bytevector-length bv))))
+
+(define (feed-bytes t bv) (terminal-feed! t bv (bytevector-length bv)))
+
+(define (row-text t row)
+  (let* ([l (grid-line (terminal-grid t) row)] [v (line-cells l)] [n (line-cols l)])
+    (let loop ([i 0] [acc '()])
+      (if (= i n)
+          (let* ([s (list->string (reverse acc))])
+            ;; trim right
+            (let trim ([k (string-length s)])
+              (if (and (> k 0) (char=? (string-ref s (- k 1)) #\space))
+                  (trim (- k 1))
+                  (substring s 0 k))))
+          (let ([a (cell-attrs v i)])
+            (loop (+ i 1)
+                  (if (fxlogtest a ATTR-SPACER)
+                      acc
+                      (cons (let ([c (cell-ch v i)]) (if (= c 0) #\space (integer->char c))) acc))))))))
+
+(define (screen t)
+  (let loop ([r (- (terminal-rows t) 1)] [acc '()])
+    (if (< r 0) acc (loop (- r 1) (cons (row-text t r) acc)))))
+
+(define (cursor t) (list (terminal-cursor-row t) (terminal-cursor-col t)))
+
+(define (esc . parts) (apply string-append "\x1b;" parts))
+
+;;; ---------------------------------------------------------------------------
+
+(let ([t (make-term 3 10)])
+  (feed t "hello\r\nworld")
+  (check "basic text" '("hello" "world" "") (screen t))
+  (check "cursor after text" '(1 5) (cursor t)))
+
+(let ([t (make-term 3 5)])
+  (feed t "abcdefg")
+  (check "autowrap" '("abcde" "fg" "") (screen t))
+  (check "wrap flag" #t (line-wrapped (grid-line (terminal-grid t) 0))))
+
+(let ([t (make-term 3 5)])
+  (feed t "abcde")
+  (check "pending wrap keeps cursor" '(0 4) (cursor t))
+  (feed t "\r\n")
+  (check "no extra line after exact fill" '(1 0) (cursor t)))
+
+(let ([t (make-term 3 5)])
+  (feed t "1\r\n2\r\n3\r\n4")
+  (check "scroll" '("2" "3" "4") (screen t))
+  (check "history" "1" (row-text t -1)))
+
+(let ([t (make-term 4 10)])
+  (feed t (esc "[2;3HX"))
+  (check "CUP" '("" "  X" "" "") (screen t))
+  (feed t (esc "[A") (esc "[2DY"))
+  (check "CUU/CUB" '(" Y" "  X" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "abcdefghij")
+  (feed t (esc "[1;4H") (esc "[K"))
+  (check "EL 0" '("abc" "" "") (screen t))
+  (feed t "XYZ" (esc "[1;2H") (esc "[1K"))
+  (check "EL 1" '("  cXYZ" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "abcdef" (esc "[1;2H") (esc "[2P"))
+  (check "DCH" '("adef" "" "") (screen t))
+  (feed t (esc "[3@"))
+  (check "ICH" '("a   def" "" "") (screen t))
+  (feed t (esc "[2X"))
+  (check "ECH" '("a   def" "" "") (screen t)))
+
+(let ([t (make-term 4 10)])
+  (feed t "1\r\n2\r\n3\r\n4" (esc "[2;3r") (esc "[2;1H") (esc "[L"))
+  (check "IL in region" '("1" "" "2" "4") (screen t))
+  (feed t (esc "[M"))
+  (check "DL in region" '("1" "2" "" "4") (screen t)))
+
+(let ([t (make-term 4 10)])
+  (feed t "1\r\n2\r\n3\r\n4" (esc "[2;3r") (esc "[3;1H") "\n")
+  (check "LF scrolls region" '("1" "3" "" "4") (screen t))
+  (check "region scroll keeps history empty" 0 (grid-hist-count (terminal-grid t))))
+
+(let ([t (make-term 3 10)])
+  (feed t "a" (esc "M"))
+  (check "RI at top scrolls down" '("" "a" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "\t1\tX")
+  (check "tabs" '("        1X") (list (row-text t 0)))
+  (check "tab stop clamps at edge" '(0 9) (cursor t)))
+
+(let ([t (make-term 3 20)])
+  (feed t (esc "[1;31mR") (esc "[38;5;100mI") (esc "[38;2;1;2;3mT") (esc "[48:2::4:5:6mC") (esc "[0m"))
+  (let ([v (line-cells (grid-line (terminal-grid t) 0))])
+    (check "sgr red" 1 (cell-fg v 0))
+    (check "sgr bold" ATTR-BOLD (fxand ATTR-BOLD (cell-attrs v 0)))
+    (check "sgr 256" 100 (cell-fg v 1))
+    (check "sgr rgb" (fxior COLOR-RGB #x010203) (cell-fg v 2))
+    (check "sgr rgb colon" (fxior COLOR-RGB #x040506) (cell-bg v 3))))
+
+(let ([t (make-term 3 20)])
+  (feed t (esc "[4:3mA") (esc "[24mB"))
+  (let ([v (line-cells (grid-line (terminal-grid t) 0))])
+    (check "curly underline" UL-CURLY (fxsrl (fxand ATTR-UNDERLINE-MASK (cell-attrs v 0)) ATTR-UNDERLINE-SHIFT))
+    (check "underline off" 0 (fxand ATTR-UNDERLINE-MASK (cell-attrs v 1)))))
+
+(let ([t (make-term 3 10)])
+  (feed t "日本x")
+  (check "wide chars" '("日本x" "" "") (screen t))
+  (check "wide cursor" '(0 5) (cursor t))
+  (feed t (esc "[1;2Hy"))
+  (check "overwrite half wide" '(" y本x" "" "") (screen t)))
+
+(let ([t (make-term 3 5)])
+  (feed t "abcd日")
+  (check "wide wraps at edge" '("abcd" "日" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "e\x301;x")
+  (check "combining char doesn't advance" '(0 2) (cursor t))
+  (check "combining stored" "\x301;"
+         (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 0 #f)))
+
+(let ([t (make-term 3 10)])
+  (feed t "main" (esc "[?1049h") "alt")
+  (check "alt screen (cursor kept)" '("    alt" "" "") (screen t))
+  (feed t (esc "[?1049l"))
+  (check "back to primary" '("main" "" "") (screen t))
+  (check "cursor restored" '(0 4) (cursor t)))
+
+(let ([t (make-term 5 10)])
+  (feed t (esc "[3;4H") (esc "[6n"))
+  (check "CPR" '("\x1b;[3;4R") responses))
+
+(let ([t (make-term 5 10)])
+  (feed t (esc "[c"))
+  (check "DA1" '("\x1b;[?62;22c") responses))
+
+(let ([t (make-term 5 10)])
+  (feed t (esc "[?2004h"))
+  (check "bracketed paste" #t (terminal-bracketed-paste? t))
+  (feed t (esc "[?1000;1006h"))
+  (check "mouse mode" 'click (terminal-mouse-mode t))
+  (check "sgr mouse" #t (terminal-mouse-sgr? t))
+  (feed t (esc "[?2004$p"))
+  (check "DECRQM" "\x1b;[?2004;1$y" (car responses)))
+
+(let ([t (make-term 5 10)] [title #f])
+  (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (set! title s)) void void)
+  (feed t (esc "]0;hello world\a"))
+  (check "OSC title BEL" "hello world" title)
+  (feed t (esc "]2;second" "\x1b;\\"))
+  (check "OSC title ST" "second" title))
+
+(let ([t (make-term 5 10)] [clip #f])
+  (terminal-set-callbacks! t (lambda (s) (void)) void void (lambda (s) (set! clip s)))
+  (feed t (esc "]52;c;aGVsbG8gd29ybGQ=\a"))
+  (check "OSC 52" "hello world" clip))
+
+(let ([t (make-term 5 10)])
+  (feed t (esc "]11;rgb:12/34/56\a"))
+  (check "OSC 11 set" #x123456 (vector-ref (terminal-palette t) COLOR-BG))
+  (feed t (esc "]11;?\a"))
+  (check "OSC 11 query" "\x1b;]11;rgb:1212/3434/5656\a" (car responses)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "(0") "qx" (esc "(B") "q")
+  (check "DEC graphics" '("─│q" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "x" (esc "[5b"))
+  (check "REP" '("xxxxxx" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "abc" (esc "7") (esc "[3;5H") (esc "8") "Z")
+  (check "DECSC/DECRC" '("abcZ" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "#8"))
+  (check "DECALN" '("EEEEEEEEEE" "EEEEEEEEEE" "EEEEEEEEEE") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "[?7l") "abcdefghijklm")
+  (check "no autowrap" '("abcdefghim" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "[4h") "abc" (esc "[1;1H") "X")
+  (check "insert mode" '("Xabc" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed-bytes t #vu8(#xff 111 107))
+  (check "invalid utf8" '("\xfffd;ok" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  ;; sequence split across feeds
+  (feed t "\x1b;[3")
+  (feed-bytes t #vu8(49 109 65 #xe2 #x82))
+  (feed-bytes t #vu8(#xac))
+  (check "split input" '("A€" "" "") (screen t))
+  (check "split sgr" 1 (cell-fg (line-cells (grid-line (terminal-grid t) 0)) 0)))
+
+;;; reflow
+(let ([t (make-term 3 10)])
+  (feed t "0123456789abcdef\r\nxy")
+  (terminal-resize! t 3 5)
+  (check "reflow narrower" '("abcde" "f" "xy") (screen t))
+  (check "reflow history" '("01234" "56789") (list (row-text t -2) (row-text t -1)))
+  (terminal-resize! t 3 20)
+  (check "reflow wider" '("0123456789abcdef" "xy" "") (screen t))
+  (check "reflow cursor" '(1 2) (cursor t)))
+
+(let ([t (make-term 4 10)])
+  (feed t "a\r\nb")
+  (terminal-resize! t 2 10)
+  (check "shrink rows keeps cursor line" '("a" "b") (screen t))
+  (terminal-resize! t 6 10)
+  (check "grow rows" '("a" "b" "" "" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "1\r\n2\r\n3\r\n4\r\n5")
+  (terminal-resize! t 5 10)
+  (check "grow pulls history" '("1" "2" "3" "4" "5") (screen t))
+  (check "grow cursor" '(4 1) (cursor t)))
+
+(let ([t (make-term 3 4)])
+  (feed t "ab日本")
+  (terminal-resize! t 3 3)
+  (check "reflow wide" '("ab" "日" "本") (screen t)))
+
+;;; scrollback view anchoring
+(let ([t (make-term 2 5)])
+  (feed t "1\r\n2\r\n3\r\n4")
+  (terminal-scroll-display! t 1)
+  (check "display offset" 1 (terminal-display-offset t))
+  (feed t "\r\n5")
+  (check "display anchored" 2 (terminal-display-offset t)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "[2 q"))
+  (check "DECSCUSR" 'block (terminal-cursor-style t))
+  (feed t (esc "[5 q"))
+  (check "DECSCUSR beam" 'beam (terminal-cursor-style t))
+  (check "DECSCUSR blink" #t (terminal-cursor-blink? t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "abc" (esc "c"))
+  (check "RIS" '("" "" "") (screen t)))
+
+(let ([t (make-term 3 10)])
+  (feed t (esc "[18t"))
+  (check "report size" "\x1b;[8;3;10t" (car responses)))
+
+(printf "~a passed, ~a failed\n" passes failures)
+(exit (if (= failures 0) 0 1))
