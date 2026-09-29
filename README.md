@@ -83,6 +83,16 @@ make test       # headless test suite (terminal, selection, keys, renderer),
                 # run against the sources and against the optimized build
 ```
 
+With Nix (flakes):
+
+```sh
+nix run             # build and run chezterm
+nix build           # package in ./result
+nix flake check     # build, test suite, formatting
+nix fmt             # format the Nix files
+nix develop         # shell with Chez, the libraries and c2ffi (for `make bindings`)
+```
+
 ```
 Usage: chezterm [options] [-e command [args...]]
 
