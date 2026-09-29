@@ -15,6 +15,9 @@ PIXMAN_INC ?= $(shell pkg-config --variable=includedir pixman-1 2>/dev/null || e
 SHARED_OBJECTS ?=
 # Directories appended to PATH by the launcher (for xdg-open, say).
 RUNTIME_PATH ?=
+# ncurses' terminfo compiler; the terminfo entry is skipped without it.
+TIC      ?= $(shell command -v tic 2>/dev/null)
+TERMINFO_SRC := terminfo/chezterm.terminfo
 
 SRC      := $(wildcard src/chezterm/*.ss) src/main.ss
 FFI_LIB  := src/chezterm/ffi.ss
@@ -24,9 +27,22 @@ PROTOCOLS := protocols/wayland.xml protocols/xdg-shell.xml \
              protocols/primary-selection-unstable-v1.xml \
              protocols/cursor-shape-v1.xml
 
-.PHONY: all bindings protocols relink check-generated run test check clean install
+.PHONY: all bindings protocols relink check-generated run test check clean install terminfo
 
-all: $(BUILD)/chezterm
+all: $(BUILD)/chezterm terminfo
+
+# The chezterm terminfo entries, compiled into $(BUILD)/terminfo.  The
+# launcher passes that directory to chezterm (CHEZTERM_TERMINFO), which then
+# sets TERM=chezterm for its programs; see term-setting in src/chezterm/app.ss.
+terminfo: $(BUILD)/terminfo/c/chezterm
+
+$(BUILD)/terminfo/c/chezterm: $(TERMINFO_SRC)
+ifneq ($(TIC),)
+	@mkdir -p $(BUILD)/terminfo
+	$(TIC) -x -o $(BUILD)/terminfo $(TERMINFO_SRC)
+else
+	@echo "tic not found: not compiling the terminfo entry (TERM will be xterm-256color)"
+endif
 
 # ---------------------------------------------------------------------------
 # FFI bindings: c2ffi -> JSON -> Scheme.  The generated library is committed
@@ -63,13 +79,14 @@ check-generated:
 # ---------------------------------------------------------------------------
 
 # $(call launcher,LIBDIR,PROGRAM) prints the script that runs PROGRAM (main.so).
-launcher = printf '\#!/bin/sh\nCHEZTERM_EXE="$$0" %sexec %s --libdirs "%s" --program "%s" "$$@"\n' \
-	    '$(if $(RUNTIME_PATH),PATH="$$PATH:$(RUNTIME_PATH)" )' "$(SCHEME)" "$(1)" "$(2)"
+# $(3) is the directory holding the compiled terminfo entry.
+launcher = printf '\#!/bin/sh\nCHEZTERM_EXE="$$0" CHEZTERM_TERMINFO="%s" %sexec %s --libdirs "%s" --program "%s" "$$@"\n' \
+	    "$(3)" '$(if $(RUNTIME_PATH),PATH="$$PATH:$(RUNTIME_PATH)" )' "$(SCHEME)" "$(1)" "$(2)"
 
 $(BUILD)/chezterm: $(SRC)
 	@mkdir -p $(BUILD)/lib/chezterm
 	$(SCHEME) -q --libdirs src::$(BUILD)/lib --script tools/build.ss
-	@$(call launcher,$(CURDIR)/$(BUILD)/lib,$(CURDIR)/$(BUILD)/main.so) > $@
+	@$(call launcher,$(CURDIR)/$(BUILD)/lib,$(CURDIR)/$(BUILD)/main.so,$(CURDIR)/$(BUILD)/terminfo) > $@
 	@chmod +x $@
 
 run: all
@@ -80,6 +97,7 @@ run: all
 test: all
 	$(SCHEME) -q --libdirs src --script tests/run.ss
 	$(SCHEME) -q --libdirs $(BUILD)/lib --script tests/run.ss
+	TERMINFO=$(CURDIR)/$(BUILD)/terminfo $(SCHEME) -q --libdirs $(BUILD)/lib --script tests/terminfo.ss
 
 check: test
 
@@ -87,8 +105,13 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/lib/chezterm $(DESTDIR)$(PREFIX)/bin
 	cp -r $(BUILD)/lib/. $(DESTDIR)$(PREFIX)/lib/chezterm/
 	install -m644 $(BUILD)/main.so $(DESTDIR)$(PREFIX)/lib/chezterm/main.so
-	$(call launcher,$(PREFIX)/lib/chezterm,$(PREFIX)/lib/chezterm/main.so) > $(DESTDIR)$(PREFIX)/bin/chezterm
+	$(call launcher,$(PREFIX)/lib/chezterm,$(PREFIX)/lib/chezterm/main.so,$(PREFIX)/share/terminfo) > $(DESTDIR)$(PREFIX)/bin/chezterm
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/chezterm
+ifneq ($(TIC),)
+	install -d $(DESTDIR)$(PREFIX)/share/terminfo
+	$(TIC) -x -o $(DESTDIR)$(PREFIX)/share/terminfo $(TERMINFO_SRC)
+endif
+	install -Dm644 $(TERMINFO_SRC) $(DESTDIR)$(PREFIX)/share/chezterm/chezterm.terminfo
 	install -Dm644 chezterm.desktop $(DESTDIR)$(PREFIX)/share/applications/chezterm.desktop
 	install -Dm644 chezterm.scm.example $(DESTDIR)$(PREFIX)/share/doc/chezterm/chezterm.scm.example
 

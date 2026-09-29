@@ -6,7 +6,7 @@
   (import (chezscheme) (chezterm ffi) (chezterm cutil) (chezterm config)
           (chezterm charwidth) (chezterm grid) (chezterm terminal) (chezterm font)
           (chezterm render) (chezterm keyboard) (chezterm window) (chezterm pty)
-          (chezterm selection))
+          (chezterm selection) (chezterm termenv))
 
   (define version "0.1.0")
 
@@ -906,8 +906,10 @@ Options:
                                             (* cols (font-cell-width font))
                                             (* rows (font-cell-height font))
                                             (or (opt 'cwd) (config-ref 'working-directory))
-                                            (append `(("TERM" . ,(config-ref 'term))
-                                                      ("COLORTERM" . "truecolor")
+                                            (append (term-environment (config-ref 'term)
+                                                                      (getenv "CHEZTERM_TERMINFO")
+                                                                      getenv file-exists?)
+                                                    `(("COLORTERM" . "truecolor")
                                                       ("TERM_PROGRAM" . "chezterm")
                                                       ("TERM_PROGRAM_VERSION" . ,version))
                                                     (map (lambda (kv) (cons (car kv) (cdr kv)))

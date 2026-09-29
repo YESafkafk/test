@@ -69,6 +69,7 @@
         ./tests
         ./chezterm.desktop
         ./chezterm.scm.example
+        ./terminfo
       ];
 
       bindingsSource = source [

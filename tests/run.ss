@@ -1,6 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
-        (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard))
+        (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
+        (chezterm termenv))
 
 (define failures 0)
 (define passes 0)
@@ -393,6 +394,25 @@
   (check "keypad app" "\x1b;Oq" (key "KP_1" "1" 0 #f #t #f))
   (check "binding parse" (cons (fxior MOD-CTRL MOD-SHIFT) (keysym-by-name "c"))
          (parse-key-binding "ctrl+shift+c")))
+
+;;; TERM selection
+(let* ([env (lambda (alist) (lambda (k) (let ([e (assoc k alist)]) (and e (cdr e)))))]
+       [files (lambda (paths) (lambda (p) (and (member p paths) #t)))])
+  (check "term: configured value wins" '(("TERM" . "xterm"))
+         (term-environment "xterm" "/b" (env '()) (files '("/usr/share/terminfo/c/chezterm"))))
+  (check "term: system entry" '(("TERM" . "chezterm"))
+         (term-environment #f "/b" (env '()) (files '("/usr/share/terminfo/c/chezterm"))))
+  (check "term: hashed directory layout" '(("TERM" . "chezterm"))
+         (term-environment #f #f (env '(("HOME" . "/h"))) (files '("/h/.terminfo/63/chezterm"))))
+  (check "term: bundled entry extends TERMINFO_DIRS" '(("TERM" . "chezterm") ("TERMINFO_DIRS" . "/b:"))
+         (term-environment #f "/b" (env '()) (files '("/b/c/chezterm"))))
+  (check "term: bundled entry keeps the user's TERMINFO_DIRS"
+         '(("TERM" . "chezterm") ("TERMINFO_DIRS" . "/b:/x:"))
+         (term-environment #f "/b" (env '(("TERMINFO_DIRS" . "/x:"))) (files '("/b/c/chezterm"))))
+  (check "term: TERMINFO_DIRS entry found" '(("TERM" . "chezterm"))
+         (term-environment #f "/b" (env '(("TERMINFO_DIRS" . "/x"))) (files '("/x/c/chezterm" "/b/c/chezterm"))))
+  (check "term: fallback" '(("TERM" . "xterm-256color"))
+         (term-environment #f "/b" (env '()) (files '()))))
 
 ;;; renderer: incremental rendering (including the scroll optimisation)
 ;;; must produce the same pixels as a full redraw

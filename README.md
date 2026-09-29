@@ -50,6 +50,9 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
 - Optional `bell-command` run on BEL.
+- Its own terminfo entries, `chezterm` and `chezterm-direct` (see
+  [Terminfo](#terminfo)), so programs know about underline styles,
+  synchronized output, cursor shapes, the clipboard and true color.
 - Incremental software rendering into shared-memory buffers, composited with
   [pixman](https://pixman.org/):
   - only changed rows are redrawn, and scrolling moves pixels instead of redrawing
@@ -66,6 +69,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - libwayland-client, libwayland-cursor, libxkbcommon, FreeType, fontconfig,
   pixman (runtime libraries)
 - A Wayland compositor
+- `tic` from ncurses to compile the terminfo entry (optional; without it
+  `TERM` is `xterm-256color`)
 - To regenerate the bindings: c2ffi (LLVM/Clang based) and the development
   headers of the libraries above
 
@@ -86,13 +91,14 @@ make            # compiles everything into build/, creates build/chezterm
 build/chezterm
 make install    # PREFIX=/usr/local by default
 make test       # headless test suite (terminal, selection, keys, renderer),
-                # run against the sources and against the optimized build
+                # run against the sources and against the optimized build,
+                # then the terminfo entry checked against the emulator
 make check-generated  # regenerate bindings and protocols, diff with the committed files
 ```
 
 Make variables: `SCHEME` (the Chez Scheme executable), `C2FFI` and
-`C2FFI_FLAGS` (for `make bindings`), `SHARED_OBJECTS` (see [Nix](#nix)) and
-`RUNTIME_PATH` (directories the launcher appends to `PATH`).
+`C2FFI_FLAGS` (for `make bindings`), `SHARED_OBJECTS` (see [Nix](#nix)),
+`RUNTIME_PATH` (directories the launcher appends to `PATH`) and `TIC`.
 
 ```
 Usage: chezterm [options] [-e command [args...]]
@@ -173,6 +179,46 @@ default, and all actions that can be bound to keys.
 (colors (background "#1d1f21") (foreground "#c5c8c6"))
 (bind "ctrl+shift+t" spawn-new-instance)
 ```
+
+### Terminfo
+
+[`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
+entries:
+- `chezterm`: 256 colors, plus `Tc` for 24-bit color
+- `chezterm-direct`: `setaf`/`setab` take 24-bit values (ncurses `RGB`).
+
+Beyond the usual xterm capabilities they advertise:
+- underline styles (`Smulx`)
+- synchronized output (`Sync`)
+- cursor shapes (`Ss`/`Se`) and cursor color (`Cs`/`Cr`)
+- the clipboard (`Ms`)
+- bracketed paste and focus reporting (`BE`/`BD`, `fe`/`fd`)
+- the title as a status line (`hs`, `tsl`/`fsl`)
+- strikethrough (`smxx`)
+- SGR mouse (`XM`).
+
+The entry is self-contained rather than inheriting from `xterm-256color`, so
+it lists only what chezterm implements. `tests/terminfo.ss` expands every
+capability with ncurses' `tput`, feeds it to the emulator and checks the
+effect. It also checks that each key capability is exactly what chezterm
+sends for that key.
+
+`make` compiles the entries into `build/terminfo`, and `make install` puts
+them into `$(PREFIX)/share/terminfo`. The launcher tells chezterm where they
+are. When the `term` option is not set, chezterm picks `TERM` as follows:
+1. `chezterm`, if the entry is installed where ncurses looks by default
+   (`~/.terminfo`, `/usr/share/terminfo`, `TERMINFO_DIRS`, the Nix profiles).
+2. `chezterm` if it is only in the bundled directory. That directory is then
+   added to `TERMINFO_DIRS` for the programs chezterm starts.
+3. `xterm-256color` otherwise.
+
+Remote hosts usually lack the entry. Copy it over:
+
+```sh
+infocmp -x chezterm | ssh host 'tic -x -'
+```
+
+Alternatively, set `(term "xterm-256color")` in the configuration.
 
 ### Default key bindings
 
@@ -257,7 +303,8 @@ Redrawing a full 250×75 screen of colored text (2254×1354 pixels) takes about
 - Fractional scaling is rounded to the next integer scale.
 - No Alacritty vi mode, hints UI, IME (`text-input-v3`) or kitty keyboard
   protocol.
-- `TERM` defaults to `xterm-256color`; no custom terminfo entry is shipped.
+- Underline colors (SGR 58) are parsed but not drawn, so the terminfo entry
+  does not advertise `Setulc`.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.

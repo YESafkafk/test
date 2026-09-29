@@ -25,7 +25,11 @@
 (scrollback 10000)               ; lines of history
 (shell #f)                       ; #f: $SHELL; or e.g. (shell "/bin/zsh" "-l")
 (working-directory #f)
-(term "xterm-256color")          ; value of $TERM
+(term #f)                        ; value of $TERM; #f: "chezterm" when its
+                                 ; terminfo entry is installed, otherwise
+                                 ; "xterm-256color".  Use "chezterm-direct" for
+                                 ; direct-color setaf/setab, or "xterm-256color"
+                                 ; if you ssh to hosts without the entry.
 (env)                            ; extra variables: (env ("KEY" . "value") ...)
 
 ;;; Cursor -------------------------------------------------------------------

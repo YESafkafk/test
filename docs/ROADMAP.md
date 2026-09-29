@@ -5,22 +5,6 @@ would go in the code.
 
 ## Small
 
-### Terminfo entry
-
-`TERM` defaults to `xterm-256color`. A `chezterm` terminfo entry would
-advertise what the terminal supports beyond xterm:
-
-- `Smulx`: underline styles
-- `Setulc`: underline color. The parser accepts SGR 58 but ignores it.
-- `Sync`: synchronized output
-- `Ss`/`Se`: cursor shapes
-- true color (`RGB` / `Tc`)
-
-The entry would build on `xterm-256color` with `use=`. `make install` would
-compile it with `tic -x -o $(PREFIX)/share/terminfo`. `config.ss` would then
-default `term` to `chezterm` when the entry is installed, and to
-`xterm-256color` otherwise.
-
 ### OSC 8 hyperlinks
 
 The parser currently drops OSC 8. Cells would need a hyperlink id, which could
@@ -32,6 +16,8 @@ Hovering could underline the whole link.
 
 This needs a per-cell color. The cheapest place is the line's `extra` table,
 because it is rare. `draw-underline!` already takes the color as a parameter.
+Once it is drawn, add `Setulc=\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm`
+to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
 
 ## Medium
 
