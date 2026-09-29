@@ -217,7 +217,12 @@
                            (content-equal? (vector-ref keys (fx+ k 1))
                                            (line-cells (vector-ref lines 1))
                                            (extras->list (vector-ref lines 1))))
-                      (scroll-pixels! r keys k rows)
+                      (begin
+                        (scroll-pixels! r keys k rows)
+                        ;; everything that moved must be reported as damaged
+                        (set! damage (cons (cons (renderer-pad-y r)
+                                                 (fx+ (renderer-pad-y r) (fx* (fx- rows k) ch)))
+                                           damage)))
                       (find (fx+ k 1))))))))
         (do ([row 0 (fx+ row 1)]) ((fx= row rows))
           (let* ([l (vector-ref lines row)]

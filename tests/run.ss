@@ -357,7 +357,9 @@
     (feed t "\r\nline 5\r\nline 6\r\nline 7 ┌─┐")
     (let ([damage (renderer-render! r t #t #t (lambda (a) '()) #f)])
       (check "render after scroll = fresh" #t (equal? (snapshot r) (fresh-render t)))
-      (check "scroll damage is partial" #t (< (length damage) 6)))
+      (check "scroll damage is partial" #t (< (length damage) 6))
+      (check "scroll damage covers moved rows" #t
+             (exists (lambda (d) (and (<= (car d) 3) (>= (cdr d) (+ 3 (* 3 (font-cell-height f)))))) damage)))
     (terminal-scroll-display! t 2)
     (renderer-render! r t #t #t (lambda (a) '()) #f)
     (check "render scrolled back = fresh" #t (equal? (snapshot r) (fresh-render t)))

@@ -276,6 +276,18 @@
   ;;; Input ------------------------------------------------------------------------
 
   (define (seat-capabilities! w caps)
+    ;; devices that went away must be released; they are re-created when
+    ;; the capability comes back
+    (when (and (not (logtest caps WL_SEAT_CAPABILITY_KEYBOARD)) (window-keyboard-proxy w))
+      (wl_keyboard_release (window-keyboard-proxy w))
+      (window-keyboard-proxy-set! w #f)
+      (emit w 'focus #f))
+    (when (and (not (logtest caps WL_SEAT_CAPABILITY_POINTER)) (window-pointer w))
+      (when (window-cursor-shape-device w)
+        (wp_cursor_shape_device_v1_destroy (window-cursor-shape-device w))
+        (window-cursor-shape-device-set! w #f))
+      (wl_pointer_release (window-pointer w))
+      (window-pointer-set! w #f))
     (when (and (logtest caps WL_SEAT_CAPABILITY_KEYBOARD) (not (window-keyboard-proxy w)))
       (let ([kb (wl_seat_get_keyboard (window-seat w))])
         (window-keyboard-proxy-set! w kb)
