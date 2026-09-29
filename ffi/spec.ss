@@ -82,7 +82,7 @@
 ;; Enumerations: every enumerator whose name starts with one of these.
 (enum-prefixes
   "FT_PIXEL_MODE_" "FT_RENDER_MODE_" "FT_LCD_FILTER_" "FT_ENCODING_NONE"
-  "XKB_STATE_" "XKB_KEYMAP_FORMAT_" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
+  "XKB_STATE_" "XKB_KEYMAP_FORMAT_TEXT_V1" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
   "XKB_COMPOSE_" "XKB_KEYSYM_" "FcResult" "FcMatch")
 
 ;; Preprocessor constants, evaluated by a second c2ffi pass.

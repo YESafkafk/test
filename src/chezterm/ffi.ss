@@ -138,8 +138,8 @@
         [palette void*]))
     (FT_Outline_
       (struct
-        [n_contours short]
-        [n_points short]
+        [n_contours unsigned-short]
+        [n_points unsigned-short]
         [points (* FT_Vector_)]
         [tags void*]
         [contours void*]
