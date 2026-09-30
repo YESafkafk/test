@@ -103,7 +103,9 @@
      (mutable links) (mutable link-ids) (mutable link-next) (mutable link)
      (mutable link-gc-pause)
      ;; the cell extra printed characters get (see grid.ss), #f for none
-     (mutable pen-extra))
+     (mutable pen-extra)
+     ;; underline color (SGR 58), #f for the foreground
+     (mutable ul-color))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -132,7 +134,7 @@
                        #f
                        #t '() '()
                        (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
-                       #f)])
+                       #f #f)])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -724,7 +726,8 @@
     (let ([s (vector (terminal-cursor-row t) (terminal-cursor-col t)
                      (terminal-attrs t) (terminal-fg t) (terminal-bg t)
                      (terminal-origin-mode t) (vector-copy (terminal-charsets t))
-                     (terminal-gl t) (terminal-wrap-pending t) (terminal-autowrap t))])
+                     (terminal-gl t) (terminal-wrap-pending t) (terminal-autowrap t)
+                     (terminal-ul-color t))])
       (if (terminal-alt-screen t)
           (terminal-saved-alt-set! t s)
           (terminal-saved-primary-set! t s))))
@@ -743,6 +746,7 @@
             (terminal-gl-set! t (vector-ref s 7))
             (terminal-wrap-pending-set! t (vector-ref s 8))
             (terminal-autowrap-set! t (vector-ref s 9))
+            (set-ul-color! t (vector-ref s 10))
             (clamp-cursor! t))
           (begin
             (terminal-cursor-row-set! t 0)
@@ -751,6 +755,7 @@
             (terminal-attrs-set! t 0)
             (terminal-fg-set! t COLOR-FG)
             (terminal-bg-set! t COLOR-BG)
+            (set-ul-color! t #f)
             (terminal-origin-mode-set! t #f)))))
 
   (define (esc-dispatch! t c)
@@ -1092,18 +1097,25 @@
     (terminal-attrs-set! t (fxior (fxand (terminal-attrs t) (fxnot ATTR-UNDERLINE-MASK))
                                   (fxsll style ATTR-UNDERLINE-SHIFT))))
 
+  ;; The underline color is kept in cell extras, like hyperlinks.
+  (define (set-ul-color! t c)
+    (unless (eqv? c (terminal-ul-color t))
+      (terminal-ul-color-set! t c)
+      (update-pen! t)))
+
   (define (attr-on! t a) (terminal-attrs-set! t (fxior (terminal-attrs t) a)))
   (define (attr-off! t a) (terminal-attrs-set! t (fxand (terminal-attrs t) (fxnot a))))
 
   (define (sgr! t)
     (if (fx= 0 (param-count t))
-        (begin (terminal-attrs-set! t 0) (terminal-fg-set! t COLOR-FG) (terminal-bg-set! t COLOR-BG))
+        (begin (terminal-attrs-set! t 0) (terminal-fg-set! t COLOR-FG) (terminal-bg-set! t COLOR-BG)
+               (set-ul-color! t #f))
         (let loop ([i 0])
           (when (fx< i (param-count t))
             (let ([p (param t i 0)])
               (cond
                 [(fx= p 0) (terminal-attrs-set! t 0) (terminal-fg-set! t COLOR-FG)
-                           (terminal-bg-set! t COLOR-BG) (loop (fx+ i 1))]
+                           (terminal-bg-set! t COLOR-BG) (set-ul-color! t #f) (loop (fx+ i 1))]
                 [(fx= p 1) (attr-on! t ATTR-BOLD) (loop (fx+ i 1))]
                 [(fx= p 2) (attr-on! t ATTR-DIM) (loop (fx+ i 1))]
                 [(fx= p 3) (attr-on! t ATTR-ITALIC) (loop (fx+ i 1))]
@@ -1135,7 +1147,10 @@
                               (when c (terminal-bg-set! t c))
                               (loop next))]
                 [(fx= p 49) (terminal-bg-set! t COLOR-BG) (loop (fx+ i 1))]
-                [(fx= p 58) (let-values ([(c next) (extended-color t i)]) (loop next))]
+                [(fx= p 58) (let-values ([(c next) (extended-color t i)])
+                              (when c (set-ul-color! t c))
+                              (loop next))]
+                [(fx= p 59) (set-ul-color! t #f) (loop (fx+ i 1))]
                 [(fx<= 90 p 97) (terminal-fg-set! t (fx- p 82)) (loop (fx+ i 1))]
                 [(fx<= 100 p 107) (terminal-bg-set! t (fx- p 92)) (loop (fx+ i 1))]
                 [else (loop (fx+ i 1))]))))))
@@ -1303,7 +1318,7 @@
     (update-pen! t))
 
   (define (update-pen! t)
-    (terminal-pen-extra-set! t (make-extra "" (terminal-link t) #f)))
+    (terminal-pen-extra-set! t (make-extra "" (terminal-link t) (terminal-ul-color t))))
 
   ;; The id for a new link to URI (with id parameter ID, or #f), or 0 when
   ;; there is no room for it.
@@ -1391,7 +1406,7 @@
     (when (and (fx>= (string-length s) 2) (string=? (substring s 0 2) "$q"))
       (let ([what (substring s 2 (string-length s))])
         (cond
-          [(string=? what "m") (respond t "\x1b;P1$r0m\x1b;\\")]
+          [(string=? what "m") (respond t (format "\x1b;P1$r~am\x1b;\\" (sgr-report t)))]
           [(string=? what "r")
            (respond t (format "\x1b;P1$r~a;~ar\x1b;\\" (fx+ 1 (terminal-top t)) (fx+ 1 (terminal-bottom t))))]
           [(string=? what " q")
@@ -1399,6 +1414,32 @@
                               (fx+ (case (terminal-cursor-style t) [(block) 1] [(underline) 3] [else 5])
                                    (if (terminal-cursor-blink t) 0 1))))]
           [else (respond t "\x1b;P0$r\x1b;\\")]))))
+
+  ;; The current SGR attributes as DECRQSS reports them, in the forms kitty
+  ;; uses: "0;1;4:3;38:5:196;58:2:255:0:0".
+  (define (sgr-report t)
+    (let ([a (terminal-attrs t)] [o (open-output-string)])
+      (define (color base bright ext c default)
+        (cond
+          [(eqv? c default) (void)]
+          [(fxlogtest c COLOR-RGB)
+           (format o ";~a:2:~a:~a:~a" ext (fxsrl (fxand c #xFF0000) 16) (fxsrl (fxand c #xFF00) 8)
+                   (fxand c #xFF))]
+          [(and base (fx< c 8)) (format o ";~a" (fx+ base c))]
+          [(and bright (fx< c 16)) (format o ";~a" (fx+ bright (fx- c 8)))]
+          [else (format o ";~a:5:~a" ext c)]))
+      (put-string o "0")
+      (for-each (lambda (bit code) (when (fxlogtest a bit) (format o ";~a" code)))
+                (list ATTR-BOLD ATTR-DIM ATTR-ITALIC) '(1 2 3))
+      (let ([ul (fxsrl (fxand a ATTR-UNDERLINE-MASK) ATTR-UNDERLINE-SHIFT)])
+        (cond [(fx= ul UL-SINGLE) (put-string o ";4")]
+              [(fx> ul UL-SINGLE) (format o ";4:~a" ul)]))
+      (for-each (lambda (bit code) (when (fxlogtest a bit) (format o ";~a" code)))
+                (list ATTR-BLINK ATTR-REVERSE ATTR-HIDDEN ATTR-STRIKE) '(5 7 8 9))
+      (color 30 90 38 (terminal-fg t) COLOR-FG)
+      (color 40 100 48 (terminal-bg t) COLOR-BG)
+      (color #f #f 58 (terminal-ul-color t) #f)
+      (get-output-string o)))
 
   ;;; Reset & resize -------------------------------------------------------------
 
@@ -1414,6 +1455,7 @@
     (terminal-attrs-set! t 0)
     (terminal-fg-set! t COLOR-FG)
     (terminal-bg-set! t COLOR-BG)
+    (terminal-ul-color-set! t #f)
     (terminal-charsets-set! t (vector 'ascii 'ascii 'ascii 'ascii))
     (terminal-gl-set! t 0)
     (terminal-saved-primary-set! t #f)

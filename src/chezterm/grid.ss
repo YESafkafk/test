@@ -21,7 +21,7 @@
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
           line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
           make-extra extra-marks extra-link extra-ul-color
-          line-marks line-link line-extra-put! line-extra-fill! line-add-mark!
+          line-marks line-link line-ul-color line-extra-put! line-extra-fill! line-add-mark!
           line-content-length
           line-copy
           make-grid grid? grid-rows grid-cols grid-line grid-screen-line
@@ -105,6 +105,10 @@
   ;; the hyperlink id of column COL, 0 for none
   (define (line-link l col)
     (let ([x (line-extra-ref l col)]) (if x (extra-link x) 0)))
+
+  ;; the underline color of column COL, #f for the foreground
+  (define (line-ul-color l col)
+    (let ([x (line-extra-ref l col)]) (and x (extra-ul-color x))))
 
   ;; Set the extra of column COL to X (#f: none).
   (define (line-extra-put! l col x)
