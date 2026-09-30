@@ -49,6 +49,7 @@
       (scroll-multiplier . 3)
       (alternate-scroll . #t)
       (copy-on-select . #t)             ; selections go to the primary selection
+      (mouse-hide-when-typing . #f)     ; hide the pointer while typing
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
       (bell-duration . 0)               ; ms of the visual bell's flash, 0: none

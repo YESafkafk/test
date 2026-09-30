@@ -930,6 +930,10 @@
   (check "default bindings: hint-paste and hint-select not bound" '()
          (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
 
+;;; options that are off by default
+(check "off by default: clipboard-read, bell-duration, mouse-hide-when-typing" '(deny 0 #f)
+       (map config-ref '(clipboard-read bell-duration mouse-hide-when-typing)))
+
 ;;; open-command: a list of strings, the URI is appended to it
 (check "open-command: default" '("xdg-open") (config-ref 'open-command))
 (check "open-command: one string" '(open-command "firefox") (config-normalize '(open-command "firefox")))

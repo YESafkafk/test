@@ -21,7 +21,7 @@
   (export open-window window? window-display-fd window-flush! window-dispatch!
           window-prepare-read! window-read-events! window-cancel-read!
           window-present! window-can-present? window-configured?
-          window-set-title! window-set-cursor! window-toggle-fullscreen!
+          window-set-title! window-set-cursor! window-hide-cursor! window-toggle-fullscreen!
           window-set-clipboard! window-request-paste! window-poll-fds window-fd-ready!
           window-keyboard window-repeat-rate window-repeat-delay window-scale
           window-width window-height window-owns-selection? window-set-min-size!
@@ -52,6 +52,7 @@
             (mutable pointer-serial)
             (mutable cursor-shape-device) (mutable cursor-theme) (mutable cursor-surface)
             (mutable cursor-name)
+            (mutable cursor-hidden)      ; the pointer is hidden (window-hide-cursor!)
             (mutable axis-discrete)      ; accumulated wheel steps for the frame
             (mutable axis-value) (mutable axis-source)
             (mutable data-device) (mutable primary-device)
@@ -73,7 +74,7 @@
       (when (ptr-null? d)
         (error 'chezterm "cannot connect to a Wayland display (is WAYLAND_DISPLAY set?)"))
       (let ([w (make-window d sink '() '() '() #f #f #f #f #f #f width height 1 #f #f '() #f
-                            #f #f #f (make-keyboard) 25 600 0 0 #f #f #f #f
+                            #f #f #f (make-keyboard) 25 600 0 0 #f #f #f #f #f
                             0 0.0 #f #f #f #f #f (make-eqv-hashtable) #f #f #f #f '()
                             app-id title)])
         (let ([reg (wl_display_get_registry d)])
@@ -366,6 +367,7 @@
     (case ev
       [(enter)
        (window-pointer-serial-set! w (car args))
+       (window-cursor-hidden-set! w #f)       ; it moved in
        (apply-cursor! w)
        (emit w 'pointer-enter (caddr args) (cadddr args))]
       [(leave) (emit w 'pointer-leave)]
@@ -394,6 +396,14 @@
   (define (window-set-cursor! w name)
     (unless (eq? name (window-cursor-name w))
       (window-cursor-name-set! w name)
+      (unless (window-cursor-hidden w) (apply-cursor! w))))
+
+  ;; Hide the pointer over the window (HIDE? #t) or show it again.  A
+  ;; hidden pointer has no cursor surface, which wl_pointer.set_cursor
+  ;; allows; it shows again when it enters the window.
+  (define (window-hide-cursor! w hide?)
+    (unless (eq? hide? (window-cursor-hidden w))
+      (window-cursor-hidden-set! w hide?)
       (apply-cursor! w)))
 
   (define (apply-cursor! w)
@@ -401,6 +411,7 @@
           [name (or (window-cursor-name w) 'text)])
       (when p
         (cond
+          [(window-cursor-hidden w) (wl_pointer_set_cursor p serial #f 0 0)]
           [(window-cursor-shape-device w)
            => (lambda (dev)
                 (wp_cursor_shape_device_v1_set_shape

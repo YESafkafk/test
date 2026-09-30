@@ -59,6 +59,10 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - **Background opacity** (premultiplied ARGB buffers).
 - Server-side decorations through `xdg-decoration` when the compositor offers them.
 - `wp_cursor_shape_v1` pointer cursors, with an XCursor theme fallback.
+  `(mouse-hide-when-typing #t)` hides the pointer while typing, as
+  Alacritty's `mouse.hide_when_typing`: when a key is sent to the program,
+  on a paste and in the search prompt, until the pointer moves, a button is
+  pressed or the wheel turns.
 - Keyboard handling through xkbcommon, including compose/dead keys, key repeat,
   application cursor/keypad modes and xterm-style modifier encoding.
 - The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)

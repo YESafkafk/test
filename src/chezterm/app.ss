@@ -410,6 +410,7 @@
                                  [else (write-char c out) (loop (+ i 1))]))))
                          (get-output-string out))])
       (terminal-scroll-to-bottom! term)
+      (typing!)
       (if (terminal-bracketed-paste? term)
           (send! (string-append "\x1b;[200~" normalized "\x1b;[201~"))
           (send! normalized))))
@@ -523,6 +524,7 @@
          (set! search-query "") (set! search-match #f) (set! need-redraw #t)]
         [(and (> (string-length text) 0) (char>=? (string-ref text 0) #\space)
               (not (logtest mods MOD-CTRL)))
+         (typing!)
          (set! search-query (string-append search-query text))
          (search-step! search-backward #t)
          (set! need-redraw #t)]
@@ -700,7 +702,8 @@
         ;; modifier keys and releases (kitty keyboard protocol) keep the view
         (unless (or (= (key-event-type ev) KEY-RELEASE) (key-event-modifier-key? ev))
           (terminal-scroll-to-bottom! term)
-          (reset-blink!))
+          (reset-blink!)
+          (typing!))
         (send! bytes))))
 
   (define (key-release! key ev)
@@ -709,6 +712,16 @@
         (when ev (send-key! ev))))
 
   ;;; Mouse --------------------------------------------------------------------------------
+
+  ;; With mouse-hide-when-typing, the pointer is hidden while typing, as in
+  ;; Alacritty: when a key other than a modifier is sent to the program,
+  ;; on a paste and when a search is typed.  It shows again when it moves,
+  ;; a button is pressed or the wheel turns.
+  (define (typing!)
+    (when (and pointer-inside (config-ref 'mouse-hide-when-typing))
+      (window-hide-cursor! win #t)))
+
+  (define (show-pointer!) (window-hide-cursor! win #f))
 
   (define (mouse-reporting?)
     (and (terminal-mouse-mode term)
@@ -747,6 +760,7 @@
     (cond [(= button BTN-LEFT) 0] [(= button BTN-MIDDLE) 1] [(= button BTN-RIGHT) 2] [else #f]))
 
   (define (pointer-button! button pressed?)
+    (show-pointer!)
     (set! mouse-buttons (if pressed? (cons button mouse-buttons) (remv button mouse-buttons)))
     (let ([cell (pointer-view-cell)])
       (cond
@@ -818,6 +832,7 @@
   (define (target-key t) (and t (list (target-uri t) (target-start t) (target-end t))))
 
   (define (pointer-motion! x y)
+    (show-pointer!)
     (set! mouse-x x)
     (set! mouse-y y)
     (set! pointer-inside #t)
@@ -844,6 +859,7 @@
 
   (define (scroll! amount discrete?)
     ;; amount: wheel steps when discrete?, else surface pixels
+    (show-pointer!)
     (let ([lines (if discrete?
                      (* amount (config-ref 'scroll-multiplier))
                      (begin

@@ -56,6 +56,8 @@
                                  ; primary selection with OSC 52 ; c|p ; ?
                                  ; deny: they get an empty reply
 (word-separators ",│`|:\"' ()[]{}<>\t")
+(mouse-hide-when-typing #f)      ; hide the pointer while typing, until it
+                                 ; moves, a button is pressed or the wheel turns
 
 ;;; Links & keyboard hints ---------------------------------------------------
 (open-command "xdg-open")        ; opens links and URLs (Ctrl+click, hint-open);
