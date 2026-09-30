@@ -34,6 +34,16 @@ What is left:
 - **Clicking in the command line to move the cursor**, which kitty offers
   with `A;click_events=1`.
 
+### Urgency on BEL (`xdg-activation-v1`)
+
+The visual bell (`bell-duration`) only shows while the window is visible.
+foot's `bell.urgent` marks an unfocused window as urgent instead: it asks
+`xdg_activation_v1` for a token and activates its own surface with it,
+which sway (and others) turn into an urgency hint. sway offers the
+global. This needs `xdg-activation-v1.xml` in `protocols/` and the
+Makefile's `PROTOCOLS` list, binding it in `window.ss`, and an option such
+as `bell-urgent`.
+
 ### Performance findings from the benchmarks
 
 [BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with

@@ -71,7 +71,9 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
-- Optional `bell-command` run on BEL.
+- A visual bell on BEL, as in Alacritty: `(bell-duration 150)` flashes the
+  window in the `bell` color (white by default), fading out over that many
+  milliseconds. Independently, an optional `bell-command` is run.
 - Its own terminfo entries, `chezterm` and `chezterm-direct` (see
   [Terminfo](#terminfo)), so programs know about underline styles,
   synchronized output, cursor shapes, the clipboard and true color.

@@ -2049,6 +2049,39 @@
       (renderer-render! r t #t #t (lambda (a) '()) #f)
       (check "pushed hint labels gone = fresh" #t (equal? (snapshot r) (fresh (lambda (a) '())))))
     (renderer-free! r))
+;; the visual bell tints the whole image; the frame after it is a full
+  ;; redraw, also when nothing changed or the output scrolled meanwhile
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [pixel (lambda (x y) (foreign-ref 'unsigned-32 (renderer-pixels r) (* 4 (+ x (* y (renderer-width r))))))])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "some text\r\n" (esc "[41m") "red" (esc "[0m"))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: damage" (list (cons 0 (renderer-height r))) (renderer-tint! r #x00FF00 255))
+    (check "bell tint: opaque" '(#xFF00FF00 #xFF00FF00) (list (pixel 0 0) (pixel (- (renderer-width r) 1) (- (renderer-height r) 1))))
+    (check "bell tint: next frame = fresh" #t
+           (begin (renderer-render! r t #t #t (lambda (a) '()) #f) (equal? (snapshot r) (fresh-render t))))
+    (renderer-tint! r #x00FF00 128)
+    (check "bell tint: blended over the background" #xFF008000 (pixel 0 0))
+    (feed t "\r\n1\r\n2\r\n3\r\n4\r\n5")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: scrolled meanwhile = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (check "bell tint: then incremental again" '() (renderer-render! r t #t #t (lambda (a) '()) #f))
+    (renderer-free! r))
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 0.8 #f #f #x444444 #t)])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "translucent")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (renderer-tint! r #xFFFFFF 100)
+    (check "bell tint: premultiplied" #t
+           (let ([p (foreign-ref 'unsigned-32 (renderer-pixels r) 0)])
+             (for-all (lambda (s) (<= (bitwise-and #xFF (bitwise-arithmetic-shift-right p s))
+                                      (bitwise-arithmetic-shift-right p 24)))
+                      '(0 8 16))))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: opacity, next frame = fresh" #t (equal? (snapshot r) (fresh-render t f 0.8)))
+    (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal
   (let ([t (make-term 4 15)])

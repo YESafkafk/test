@@ -51,6 +51,7 @@
       (copy-on-select . #t)             ; selections go to the primary selection
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
+      (bell-duration . 0)               ; ms of the visual bell's flash, 0: none
       (open-command . ("xdg-open"))     ; opens links and URLs; the URI is appended
       (clipboard-read . deny)           ; OSC 52 clipboard queries: allow | deny
       (hint-alphabet . "jfkdls;ahgurieowpq") ; characters of the keyboard hint labels
@@ -64,6 +65,7 @@
           (hint-background . "#f4bf75")
           (hint-typed-foreground . "#181818")
           (hint-typed-background . "#ac4242")
+          (bell . "#ffffff")              ; the visual bell's flash
           (normal . ("#181818" "#ac4242" "#90a959" "#f4bf75"
                      "#6a9fb5" "#aa759f" "#75b5aa" "#d8d8d8"))
           (bright . ("#6b6b6b" "#c55555" "#aac474" "#feca88"

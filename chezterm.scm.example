@@ -69,6 +69,10 @@
                                  ; label, the rest begins longer ones
 
 ;;; Bell ---------------------------------------------------------------------
+(bell-duration 0)                ; visual bell: on BEL the window is tinted in
+                                 ; the bell color (see colors), fading out over
+                                 ; this many milliseconds, as in Alacritty;
+                                 ; 0: no visual bell
 (bell-command #f)                ; program run on BEL, e.g.
                                  ; (bell-command "paplay" "/usr/share/sounds/freedesktop/stereo/bell.oga")
 
@@ -84,6 +88,7 @@
  (hint-background "#f4bf75")
  (hint-typed-foreground "#181818") ; and keys typed
  (hint-typed-background "#ac4242")
+ (bell "#ffffff")                ; the visual bell's flash
  (normal "#181818" "#ac4242" "#90a959" "#f4bf75"
          "#6a9fb5" "#aa759f" "#75b5aa" "#d8d8d8")
  (bright "#6b6b6b" "#c55555" "#aac474" "#feca88"

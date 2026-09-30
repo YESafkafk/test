@@ -53,6 +53,9 @@
   ;; reported to the application either
   (define consumed-keys '())
 
+  ;; visual bell
+  (define bell-start #f)          ; when the flash started, while it lasts
+
   ;; cursor blinking
   (define blink-on #t)
   (define blink-next 0)
@@ -301,8 +304,9 @@
              [damage (begin
                        (update-hover!)       ; the text under the pointer may have changed
                        (when hints (update-hints!))
-                       (renderer-render! renderer term focused blink-on highlights
-                                         (and search-active (search-overlay))))]
+                       (let ([d (renderer-render! renderer term focused blink-on highlights
+                                                  (and search-active (search-overlay)))])
+                         (if bell-start (flash-bell! d) d)))]
              [t1 (now-ms)])
         (set! backlog-next-frame (+ t1 (min max-backlog-frame-gap (* 4 (- t1 t0)))))
         (unless (null? damage)
@@ -310,6 +314,20 @@
                            (renderer-height renderer) damage
                            (< (config-ref 'opacity) 1.0))))
       (when dump-frame (check-dump-frame!))))
+
+  ;; The visual bell: the window tinted with the bell color, fading out
+  ;; linearly over bell-duration ms, as Alacritty's Linear animation.  Every
+  ;; frame of the flash is a full redraw (renderer-tint! makes the next
+  ;; one full), and so is the one after it.
+  (define (flash-bell! damage)
+    (let* ([duration (config-ref 'bell-duration)]
+           [left (- (+ bell-start duration) (now-ms))])
+      (if (and (real? duration) (> left 0))
+          (begin
+            (set! need-redraw #t)       ; the next frame fades further
+            (renderer-tint! renderer (or (color-option 'bell) #xffffff)
+                            (exact (round (* 255 (/ left duration))))))
+          (begin (set! bell-start #f) damage))))
 
   (define (check-dump-frame!)
     (when (>= (- (now-ms) start-time) (cdr dump-frame))
@@ -627,9 +645,13 @@
 
   (define last-bell -1000)
 
-  ;; BEL: run the configured bell command, at most every 100 ms
+  ;; BEL: flash the window (the visual bell), and run the configured bell
+  ;; command, at most every 100 ms
   (define (ring-bell!)
-    (let ([cmd (config-ref 'bell-command)] [t (now-ms)])
+    (let ([cmd (config-ref 'bell-command)] [t (now-ms)] [duration (config-ref 'bell-duration)])
+      (when (and (real? duration) (> duration 0))
+        (set! bell-start t)
+        (set! need-redraw #t))
       (when (and cmd (> (- t last-bell) 100))
         (set! last-bell t)
         (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))
