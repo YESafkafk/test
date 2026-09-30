@@ -416,15 +416,24 @@
   ;; Bytes (as a string) to send for key event EV given the terminal modes and
   ;; the kitty keyboard protocol FLAGS, or #f when the event sends nothing.
   ;; With flags 0 this is the legacy encoding, which reports no releases.
+  ;; With LEGACY-CSI-U, keys that the legacy encoding sends nothing for, such
+  ;; as media keys, Menu, Print or F21-F35, are sent as kitty does with flags
+  ;; 0: as CSI u (or CSI 29 ~ for Menu, xterm's F16), which the
+  ;; specification allows.
   (define encode-key
     (case-lambda
       [(ev app-cursor app-keypad newline-mode)
-       (encode-key ev app-cursor app-keypad newline-mode 0)]
+       (encode-key ev app-cursor app-keypad newline-mode 0 #f)]
       [(ev app-cursor app-keypad newline-mode flags)
+       (encode-key ev app-cursor app-keypad newline-mode flags #f)]
+      [(ev app-cursor app-keypad newline-mode flags legacy-csi-u)
        (cond
          [(not (= flags 0)) (encode-kitty-key ev flags app-cursor)]
          [(= (key-event-type ev) KEY-RELEASE) #f]
-         [else (encode-legacy-key ev app-cursor app-keypad newline-mode)])]))
+         [(encode-legacy-key ev app-cursor app-keypad newline-mode)]
+         [(and legacy-csi-u (hashtable-contains? functional-keys (key-event-key ev)))
+          (encode-kitty-key ev 0 app-cursor)]
+         [else #f])]))
 
   (define (encode-legacy-key ev app-cursor app-keypad newline-mode)
     (let* ([sym (key-event-sym ev)]

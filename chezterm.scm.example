@@ -36,6 +36,11 @@
                                  ; (CSI > flags u).  #f: its control sequences
                                  ; are ignored, CSI ? u gets no reply, and keys
                                  ; are always sent the legacy (xterm) way.
+(kitty-keyboard-legacy-csi-u #f) ; #t: keys the legacy encoding sends nothing
+                                 ; for (media keys, Menu, Print, Pause,
+                                 ; Scroll Lock, F21-F35) are sent as CSI u even
+                                 ; without kitty keyboard flags, as kitty does.
+                                 ; All other keys stay as they are.
 
 ;;; Cursor -------------------------------------------------------------------
 (cursor-style block)             ; block | underline | beam

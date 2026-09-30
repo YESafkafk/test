@@ -539,7 +539,9 @@
 
   (define (send-key! ev)
     (let ([bytes (encode-key ev (terminal-app-cursor? term) (terminal-app-keypad? term)
-                             (terminal-newline-mode? term) (terminal-keyboard-flags term))])
+                             (terminal-newline-mode? term) (terminal-keyboard-flags term)
+                             (and (config-ref 'kitty-keyboard)
+                                  (config-ref 'kitty-keyboard-legacy-csi-u)))])
       (when bytes
         ;; modifier keys and releases (kitty keyboard protocol) keep the view
         (unless (or (= (key-event-type ev) KEY-RELEASE) (key-event-modifier-key? ev))

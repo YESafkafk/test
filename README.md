@@ -196,6 +196,12 @@ ignores its control sequences and does not answer `CSI ? u`, so programs keep
 to the legacy (xterm) key encoding. Keys that trigger a chezterm binding are
 never sent, and neither are their releases.
 
+`(kitty-keyboard-legacy-csi-u #t)` sends keys that have no legacy encoding,
+and so send nothing by default, the way kitty does even while a program has
+not asked for the protocol: media keys, Print, Pause, Scroll Lock and
+F21–F35 as `CSI u` (e.g. `CSI 57428 u` for Play), and Menu as `CSI 29 ~`.
+Every other key is encoded exactly as before.
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two

@@ -1208,7 +1208,55 @@
                    expected
                    (apply encode-key (make-key-event (keysym-by-name sym) text mods) modes))))
         legacy-mods (list-ref row 5))))
+   legacy-key-table)
+  ;; kitty-keyboard-legacy-csi-u changes none of these, except keys that
+  ;; sent nothing
+  (for-each
+   (lambda (row)
+     (let ([modes (list-ref row 4)])
+       (for-each
+        (lambda (mods expected)
+          (let* ([shift (logtest mods MOD-SHIFT)]
+                 [sym (if shift (list-ref row 2) (list-ref row 0))]
+                 [text (ctrl-text (if shift (list-ref row 3) (list-ref row 1)) mods)])
+            (when expected
+              (check (format "legacy key ~a mods ~a modes ~a, legacy CSI u" (car row) mods modes)
+                     expected
+                     (apply encode-key (make-key-event (keysym-by-name sym) text mods)
+                            (append modes (list 0 #t)))))))
+        legacy-mods (list-ref row 5))))
    legacy-key-table))
+
+;;; keys without a legacy encoding: nothing by default, CSI u (as kitty sends
+;;; with flags 0) with kitty-keyboard-legacy-csi-u
+(let ()
+  (define (sym name) (xkb_keysym_from_name name 0))     ; case-sensitive
+  (define (enc name mods csi-u . type)
+    (encode-key (let ([ev (make-key-event (sym name) "" mods)])
+                  (if (pair? type) (key-event-with-type ev (car type)) ev))
+                #f #f #f 0 csi-u))
+  (for-each
+   (lambda (k)
+     (let ([name (car k)] [mods (cadr k)] [bytes (caddr k)])
+       (check (format "legacy CSI u: ~a mods ~a, off" name mods) #f (enc name mods #f))
+       (check (format "legacy CSI u: ~a mods ~a" name mods) bytes (enc name mods #t))))
+   `(("XF86AudioPlay" 0 "\x1b;[57428u") ("XF86AudioMute" 0 "\x1b;[57440u")
+     ("XF86AudioRaiseVolume" ,MOD-CTRL "\x1b;[57439;5u") ("XF86AudioNext" ,MOD-SHIFT "\x1b;[57435;2u")
+     ("Menu" 0 "\x1b;[29~") ("Menu" ,MOD-ALT "\x1b;[29;3~")
+     ("Print" 0 "\x1b;[57361u") ("Pause" 0 "\x1b;[57362u") ("Scroll_Lock" 0 "\x1b;[57359u")
+     ("F21" 0 "\x1b;[57384u") ("F35" 0 "\x1b;[57398u") ("F24" ,MOD-SHIFT "\x1b;[57387;2u")
+     ("F30" ,(logior MOD-CTRL MOD-ALT) "\x1b;[57393;7u") ("F21" ,MOD-HYPER "\x1b;[57384;17u")))
+  (check "legacy CSI u: no release" #f (enc "XF86AudioPlay" 0 #t KEY-RELEASE))
+  (check "legacy CSI u: repeat" "\x1b;[57428u" (enc "XF86AudioPlay" 0 #t KEY-REPEAT))
+  (for-each
+   (lambda (name)
+     (check (format "legacy CSI u: modifier key ~a" name) #f (enc name 0 #t)))
+   '("Shift_L" "Control_R" "Alt_L" "Super_L" "Hyper_L" "Meta_R" "Caps_Lock" "Num_Lock"
+     "ISO_Level3_Shift"))
+  (check "legacy CSI u: F13 keeps its legacy code" "\x1b;[25~" (enc "F13" 0 #t))
+  (check "legacy CSI u: F20 keeps its legacy code" "\x1b;[34;5~" (enc "F20" MOD-CTRL #t))
+  (check "legacy CSI u: Up keeps its legacy code" "\x1b;[1;5A" (enc "Up" MOD-CTRL #t))
+  (check "legacy CSI u: a key without a kitty number" #f (enc "XF86Calculator" 0 #t)))
 
 ;;; TERM selection
 (let* ([env (lambda (alist) (lambda (k) (let ([e (assoc k alist)]) (and e (cdr e)))))]
