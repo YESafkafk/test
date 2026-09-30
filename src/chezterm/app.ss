@@ -705,8 +705,13 @@
            (set! scale s)
            (set-font! font-size s)))]
       [(focus)
+       ;; Keys held while the focus leaves get no release, as in kitty and
+       ;; foot.  A consumed key keeps its release to itself when it is still
+       ;; held after the focus came back; keys released meanwhile are dropped.
        (set! focused (car args))
-       (unless focused (set! repeat-key #f) (set! consumed-keys '()))
+       (if focused
+           (set! consumed-keys (filter (lambda (k) (memv k (cadr args))) consumed-keys))
+           (set! repeat-key #f))
        (when (terminal-focus-events? term) (send! (if focused "\x1b;[I" "\x1b;[O")))
        (set! need-redraw #t)]
       [(key-press)

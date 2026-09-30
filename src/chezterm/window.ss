@@ -6,7 +6,8 @@
 ;;;   configure width height      new logical size (0 = choose)
 ;;;   close                       the compositor asked us to close
 ;;;   scale n                     integer output scale changed
-;;;   focus bool                  keyboard focus
+;;;   focus bool held             keyboard focus; HELD lists the evdev keycodes
+;;;                               held when it arrives ('() when it leaves)
 ;;;   key-press key-event keycode  (key-event #f while composing)
 ;;;   key-release keycode key-event
 ;;;   pointer-enter x y / pointer-leave / pointer-motion x y
@@ -312,7 +313,8 @@
     (when (and (not (logtest caps WL_SEAT_CAPABILITY_KEYBOARD)) (window-keyboard-proxy w))
       (wl_keyboard_release (window-keyboard-proxy w))
       (window-keyboard-proxy-set! w #f)
-      (emit w 'focus #f))
+      (keyboard-reset-modifiers! (window-keyboard w))
+      (emit w 'focus #f '()))
     (when (and (not (logtest caps WL_SEAT_CAPABILITY_POINTER)) (window-pointer w))
       (when (window-cursor-shape-device w)
         (wp_cursor_shape_device_v1_destroy (window-cursor-shape-device w))
@@ -338,8 +340,14 @@
                   (if (= (car args) WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
                       (keyboard-set-keymap! (window-keyboard w) fd size)
                       (close fd)))]
-      [(enter) (window-serial-set! w (car args)) (emit w 'focus #t)]
-      [(leave) (emit w 'focus #f)]
+      [(enter)
+       (window-serial-set! w (car args))
+       (emit w 'focus #t (let ([keys (caddr args)])
+                           (map (lambda (i) (bytevector-u32-native-ref keys (* 4 i)))
+                                (iota (quotient (bytevector-length keys) 4)))))]
+      [(leave)
+       (keyboard-reset-modifiers! (window-keyboard w))
+       (emit w 'focus #f '())]
       [(key)
        (let ([serial (car args)] [key (caddr args)] [state (cadddr args)])
          (window-serial-set! w serial)
