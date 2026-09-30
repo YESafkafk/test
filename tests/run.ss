@@ -531,6 +531,25 @@
   (feed t (esc "[<u"))
   (check "kbd: RIS empties the primary stack" 0 (terminal-keyboard-flags t)))
 
+;; DECSTR (soft reset) empties both stacks too, as in kitty, but stays on
+;; the alternate screen
+(let ([t (make-term 3 10)])
+  (feed t (esc "[>5u") (esc "[>1u") (esc "[?1049h") (esc "[>15u"))
+  (feed t (esc "[!p"))
+  (check "kbd: DECSTR resets the current stack" 0 (terminal-keyboard-flags t))
+  (check "kbd: DECSTR stays on the alternate screen" #t (terminal-alt-screen? t))
+  (set! responses '())
+  (feed t (esc "[?u"))
+  (check "kbd: query after DECSTR" '("\x1b;[?0u") responses)
+  (feed t (esc "[?1049l"))
+  (check "kbd: DECSTR resets the primary stack" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[<u"))
+  (check "kbd: DECSTR empties the primary stack" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[>3u") (esc "[<u"))
+  (check "kbd: push and pop after DECSTR" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[=7u"))
+  (check "kbd: set after DECSTR" 7 (terminal-keyboard-flags t)))
+
 (let ([t (make-term 3 10)])
   ;; CSI u without a prefix is still SCORC
   (feed t (esc "[2;3H") (esc "[s") (esc "[H") (esc "[u"))

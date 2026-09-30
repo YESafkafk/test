@@ -1305,7 +1305,10 @@
     (terminal-gl-set! t 0)
     (terminal-saved-primary-set! t #f)
     (terminal-saved-alt-set! t #f)
-    (terminal-wrap-pending-set! t #f))
+    (terminal-wrap-pending-set! t #f)
+    ;; as in kitty, both screens' kitty keyboard flags go
+    (terminal-kbd-primary-set! t '())
+    (terminal-kbd-alt-set! t '()))
 
   (define (terminal-reset! t)
     (leave-alt-screen! t)
@@ -1320,8 +1323,6 @@
     (terminal-focus-events-set! t #f)
     (terminal-reverse-video-set! t #f)
     (terminal-sync-update-set! t #f)
-    (terminal-kbd-primary-set! t '())
-    (terminal-kbd-alt-set! t '())
     (terminal-palette-set! t (vector-copy (terminal-default-palette t)))
     (terminal-tabs-set! t (make-tabs (terminal-cols t)))
     (terminal-cursor-row-set! t 0)
