@@ -2,7 +2,7 @@
 ;;; search matches and URLs.  Rows are absolute (see terminal-abs-row).
 (library (chezterm selection)
   (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
-          line-text line-matches url-at text-url-at link-id-at link-ranges openable-url?
+          line-text line-matches url-at text-url-at link-id-at link-ranges openable-url? uri-to-open
           target? target-uri target-start target-end target-label target-link
           hint-targets text-url-target-at target-ranges)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
@@ -162,6 +162,30 @@
       (and colon
            (member (string-downcase (substring u 0 colon)) '("http" "https" "ftp" "file" "mailto"))
            #t)))
+
+  ;; What xdg-open is given to open URI, or #f when it is not opened: URIs
+  ;; that openable-url? refuses, and, as in kitty, file URIs on another
+  ;; host.  A file URI whose host is empty, localhost or HOSTNAME (this
+  ;; machine's name) loses its host: file://localhost/tmp/x opens as
+  ;; file:///tmp/x.  As in kitty (Python's urlparse), the host is the part
+  ;; before the first / ? or #, up to a port after a colon.
+  (define (uri-to-open uri hostname)
+    (and (openable-url? uri)
+         (let ([n (string-length uri)])
+           (if (not (and (>= n 7) (string-ci=? (substring uri 0 7) "file://")))
+               uri
+               (let* ([end (let loop ([i 7])
+                             (if (or (= i n) (memv (string-ref uri i) '(#\/ #\? #\#))) i (loop (+ i 1))))]
+                      [netloc (substring uri 7 end)]
+                      [host (let loop ([i 0])
+                              (cond [(= i (string-length netloc)) netloc]
+                                    [(char=? (string-ref netloc i) #\:) (substring netloc 0 i)]
+                                    [else (loop (+ i 1))]))])
+                 (cond
+                   [(string=? netloc "") uri]
+                   [(member host (list "" "localhost" hostname))
+                    (string-append "file://" (substring uri end n))]
+                   [else #f]))))))
 
   ;; URL at PT (for ctrl+click): the OSC 8 link there, or else a URL found
   ;; in the text

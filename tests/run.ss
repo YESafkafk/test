@@ -744,6 +744,21 @@
    "ssh://host" "data:text/html,x" "x-man-page://ls" "no-scheme" "" "https")
  '(#t #t #t #t #t #t #f #f #f #f #f #f #f))
 
+;; what xdg-open gets: file URIs only on this machine (as in kitty), without
+;; their host
+(for-each
+ (lambda (u expected)
+   (check (format "uri-to-open ~a" u) expected (uri-to-open u "myhost")))
+ '("https://a/x" "javascript:alert(1)" "file:///tmp/x" "file:/tmp/x" "file://localhost/tmp/x"
+   "file://myhost/tmp/a%20b?q#f" "file://myhost:22/tmp/x" "file://other/tmp/x" "file://MYHOST/tmp/x"
+   "FILE://localhost/tmp/x" "file://localhost" "file://localhost?q" "file://:1/x" "file://user@myhost/x"
+   "file://otherhost")
+ '("https://a/x" #f "file:///tmp/x" "file:/tmp/x" "file:///tmp/x"
+   "file:///tmp/a%20b?q#f" "file:///tmp/x" #f #f
+   "file:///tmp/x" "file://" "file://?q" "file:///x" #f
+   #f))
+(check "uri-to-open: empty host name" #f (uri-to-open "file://other/x" ""))
+
 ;;; hint targets: OSC 8 links and URLs found in the text, as
 ;;; (uri start end label link?) with screen rows (negative in the history)
 (define (targets t)

@@ -20,6 +20,7 @@
   (define child-pid #f)
   (define child-exited #f)
   (define hold? #f)
+  (define hostname "")            ; this machine's, for file:// URIs (see uri-to-open)
   (define quit? #f)
 
   (define scale 1)
@@ -524,11 +525,12 @@
           (begin (warn "invalid hint-alphabet ~s: at least two different characters needed" a)
                  default-hint-alphabet))))
 
-  ;; the targets ACTION can be run on
+  ;; the targets ACTION can be run on: hint-open only opens what Ctrl+click
+  ;; would
   (define (action-targets action)
     (let ([ts (hint-targets term)])
       (if (eq? action 'hint-open)
-          (filter (lambda (t) (openable-url? (target-uri t))) ts)
+          (filter (lambda (t) (uri-to-open (target-uri t) hostname)) ts)
           ts)))
 
   (define (start-hints! action)
@@ -565,7 +567,7 @@
 
   (define (run-hint-action! action t)
     (case action
-      [(hint-open) (spawn-detached (list "xdg-open" (target-uri t)) #f)]
+      [(hint-open) (spawn-detached (list "xdg-open" (uri-to-open (target-uri t) hostname)) #f)]
       [(hint-copy) (window-set-clipboard! win 'clipboard (target-uri t))]
       [(hint-select)
        (let ([s (target-start t)] [e (target-end t)])
@@ -712,7 +714,7 @@
                (set! last-click-cell pt)
                (cond
                  [(and ctrl (= click-count 1)
-                       (let ([url (url-at term pt)]) (and url (openable-url? url) url)))
+                       (let ([url (url-at term pt)]) (and url (uri-to-open url hostname))))
                   => (lambda (url) (spawn-detached (list "xdg-open" url) #f))]
                  [else
                   (set! select-anchor pt)
@@ -747,9 +749,9 @@
                              [id (link-id-at term pt)]
                              [uri (terminal-link-uri term id)])
                         (if uri
-                            (values (if (openable-url? uri) id 0) #f)
+                            (values (if (uri-to-open uri hostname) id 0) #f)
                             (let ([t (text-url-target-at term pt)])
-                              (values 0 (and t (openable-url? (target-uri t)) t)))))
+                              (values 0 (and t (uri-to-open (target-uri t) hostname) t)))))
                       (values 0 #f))])
       (unless (and (= id hover-link) (equal? (target-key url) (target-key hover-url)))
         (set! hover-link id)
@@ -1044,6 +1046,7 @@ Options:
       (init-charwidth!)
       (load-bindings!)
       (set! hold? (opt 'hold))
+      (set! hostname (host-name))
       (set! start-time (now-ms))
       (let ([d (opt 'dump-frame)])
         (when d

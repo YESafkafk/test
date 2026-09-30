@@ -1,7 +1,7 @@
 ;;; Pseudo-terminal handling: spawning the shell, I/O and window size.
 (library (chezterm pty)
   (export pty-spawn pty-resize! pty-read pty-write pty-child-exited? pty-hangup!
-          default-shell spawn-detached process-cwd)
+          default-shell spawn-detached process-cwd host-name)
   (import (chezscheme) (chezterm ffi) (chezterm cutil))
 
   (define (default-shell)
@@ -125,6 +125,14 @@
                     (begin (foreign-set! 'unsigned-8 buf n 0) (cstring->string buf)))])
         (free buf)
         r)))
+
+  ;; This machine's host name (gethostname), or "" when it has none.
+  (define (host-name)
+    (let* ([buf (malloc 257)]
+           [r (and (= 0 (gethostname buf 256))
+                   (begin (foreign-set! 'unsigned-8 buf 256 0) (cstring->string buf)))])
+      (free buf)
+      (or r "")))
 
   (define (pty-child-exited? pid)
     (let ([r (waitpid pid status-buf WNOHANG)])

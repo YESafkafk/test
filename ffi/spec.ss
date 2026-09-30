@@ -29,6 +29,7 @@
   close pipe2 (fcntl (&rest int)) poll (ioctl (&rest uptr)) dup2
   mmap munmap ftruncate memfd_create
   fork setsid (forkpty (__name uptr)) (execvp (__file uptr)) _exit waitpid kill getpid
+  (gethostname (__name uptr))
   (chdir (__path uptr)) (readlink (__buf uptr))
   timerfd_create timerfd_settime inotify_init1 inotify_add_watch
   sigemptyset sigprocmask signal
