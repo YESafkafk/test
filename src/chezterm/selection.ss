@@ -3,6 +3,7 @@
 (library (chezterm selection)
   (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
           line-text line-matches url-at text-url-at link-id-at link-ranges openable-url? uri-to-open
+          uri-local-path
           target? target-uri target-start target-end target-label target-link
           hint-targets text-url-target-at target-ranges prompt-view-offset)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
@@ -186,6 +187,35 @@
                    [(member host (list "" "localhost" hostname))
                     (string-append "file://" (substring uri end n))]
                    [else #f]))))))
+
+  ;; The path of file URI, percent-decoded, when it names a file on this
+  ;; machine (HOSTNAME) by the rule of uri-to-open, or else #f.  As in foot,
+  ;; the working directory a program reports with OSC 7 is only used when
+  ;; this gives a path; the query and fragment are not part of it.
+  (define (uri-local-path uri hostname)
+    (let ([u (uri-to-open uri hostname)])
+      (and u
+           (let ([n (string-length u)])
+             (and (> n 7)
+                  (string-ci=? (substring u 0 7) "file://")
+                  (char=? (string-ref u 7) #\/)
+                  (let ([end (let loop ([i 7])
+                               (if (or (= i n) (memv (string-ref u i) '(#\? #\#))) i (loop (+ i 1))))])
+                    (percent-decode (substring u 7 end))))))))
+
+  (define (hex-digit? c)
+    (or (char<=? #\0 c #\9) (char<=? #\a (char-downcase c) #\f)))
+
+  (define (percent-decode s)
+    (let-values ([(out extract) (open-bytevector-output-port)])
+      (let loop ([i 0] [n (string-length s)])
+        (cond
+          [(fx= i n) (utf8->string (extract))]
+          [(and (char=? (string-ref s i) #\%) (fx< (fx+ i 2) n)
+                (hex-digit? (string-ref s (fx+ i 1))) (hex-digit? (string-ref s (fx+ i 2)))
+                (string->number (substring s (fx+ i 1) (fx+ i 3)) 16))
+           => (lambda (b) (put-u8 out b) (loop (fx+ i 3) n))]
+          [else (put-bytevector out (string->utf8 (string (string-ref s i)))) (loop (fx+ i 1) n)]))))
 
   ;; URL at PT (for ctrl+click): the OSC 8 link there, or else a URL found
   ;; in the text

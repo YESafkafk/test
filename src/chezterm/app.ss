@@ -672,7 +672,8 @@
 
   (define (spawn-new-instance!)
     (let ([exe (or (getenv "CHEZTERM_EXE") "chezterm")]
-          [cwd (or (terminal-cwd term) (and child-pid (process-cwd child-pid)))])
+          [cwd (or (let ([uri (terminal-cwd-uri term)]) (and uri (uri-local-path uri hostname)))
+                   (and child-pid (process-cwd child-pid)))])
       (spawn-detached (list exe) cwd)))
 
   ;; Bindings match Shift, Alt, Ctrl and Super only.

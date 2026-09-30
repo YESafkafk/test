@@ -842,6 +842,22 @@
    #f))
 (check "uri-to-open: empty host name" #f (uri-to-open "file://other/x" ""))
 
+;;; OSC 7: the reported URI is kept; its path is used when its host is
+;;; this machine, by the rule of uri-to-open
+(let ([t (make-term 3 10)])
+  (check "OSC 7: none" #f (terminal-cwd-uri t))
+  (feed t (esc "]7;file://remote/home/me\x7;"))
+  (check "OSC 7: any host is kept" "file://remote/home/me" (terminal-cwd-uri t))
+  (feed t (esc "]7;http://x/\x7;"))
+  (check "OSC 7: only file URIs" "file://remote/home/me" (terminal-cwd-uri t)))
+(check "uri-local-path"
+       '("/tmp/a b" "/x" "/x" #f #f "/x" "/tmp/x" "/é" "/a%-1b" #f #f #f #f "/")
+       (map (lambda (u) (uri-local-path u "myhost"))
+            '("file:///tmp/a%20b" "file://localhost/x" "file://myhost/x" "file://other/x" "file://MyHost/x"
+              "file://myhost:22/x" "file:///tmp/x?q#f" "file:///%C3%A9" "file://myhost/a%-1b" "file://"
+              "file://myhost" "http://myhost/x" "file:relative" "FILE:///")))
+(check "uri-local-path: no host name" #f (uri-local-path "file://other/x" ""))
+
 ;;; hint targets: OSC 8 links and URLs found in the text, as
 ;;; (uri start end label link?) with screen rows (negative in the history)
 (define (targets t)

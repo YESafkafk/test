@@ -22,7 +22,7 @@
           terminal-selection terminal-set-selection! terminal-selection-clear!
           terminal-abs-row terminal-rel-row
           terminal-set-callbacks! terminal-reset! terminal-clear-history!
-          terminal-cwd terminal-dirty? terminal-dirty-set!
+          terminal-cwd-uri terminal-dirty? terminal-dirty-set!
           terminal-set-cell-pixel-size! terminal-set-defaults!
           terminal-keyboard-flags terminal-set-kitty-keyboard!
           terminal-link-uri terminal-link-count
@@ -78,7 +78,8 @@
      ;; charsets
      (mutable charsets) (mutable gl)
      ;; misc
-     (mutable title) (mutable title-stack) (mutable cwd)
+     (mutable title) (mutable title-stack)
+     (mutable cwd-uri)                ; the working directory's URI (OSC 7)
      (mutable palette) (mutable default-palette)
      (mutable last-char)
      (mutable display-offset)
@@ -1261,15 +1262,10 @@
         [(111) (vector-set! palette COLOR-BG (vector-ref (terminal-default-palette t) COLOR-BG))]
         [(112) (vector-set! palette COLOR-CURSOR (vector-ref (terminal-default-palette t) COLOR-CURSOR))]
         [(7)
-         ;; file://host/path
+         ;; file://host/path, kept as it is: whether the host is this
+         ;; machine is up to the reader (see uri-local-path)
          (when (and (fx> (string-length rest) 7) (string=? (substring rest 0 7) "file://"))
-           (let* ([p (substring rest 7 (string-length rest))]
-                  [slash (let loop ([i 0])
-                           (cond [(fx= i (string-length p)) #f]
-                                 [(char=? (string-ref p i) #\/) i]
-                                 [else (loop (fx+ i 1))]))])
-             (when slash
-               (terminal-cwd-set! t (percent-decode (substring p slash (string-length p)))))))]
+           (terminal-cwd-uri-set! t rest))]
         [(8) (osc-hyperlink! t rest)]
         [(133) (shell-mark! t rest)]
         [(52) (osc-clipboard! t rest term)]
@@ -1434,17 +1430,6 @@
              (hashtable-delete! (terminal-links t) id)
              (when (cdr e) (hashtable-delete! (terminal-link-ids t) (cdr e)))))
          ids entries))))
-
-  (define (percent-decode s)
-    (let-values ([(out extract) (open-bytevector-output-port)])
-      (let loop ([i 0] [n (string-length s)])
-        (cond
-          [(fx= i n) (utf8->string (extract))]
-          [(and (char=? (string-ref s i) #\%) (fx< (fx+ i 2) n)
-                (hex-digit? (string-ref s (fx+ i 1))) (hex-digit? (string-ref s (fx+ i 2)))
-                (string->number (substring s (fx+ i 1) (fx+ i 3)) 16))
-           => (lambda (b) (put-u8 out b) (loop (fx+ i 3) n))]
-          [else (put-bytevector out (string->utf8 (string (string-ref s i)))) (loop (fx+ i 1) n)]))))
 
   (define (base64-decode s)
     (define (val c)

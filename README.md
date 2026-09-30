@@ -74,7 +74,10 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   apart keys like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
-- Spawning a new instance in the current working directory (Ctrl+Shift+N).
+- Spawning a new instance in the current working directory (Ctrl+Shift+N):
+  the one a program reported with OSC 7 when its host is empty, `localhost`
+  or this machine's name (compared exactly, as for `file://` links), as in
+  foot, or else the shell's.
 - A visual bell on BEL, as in Alacritty: `(bell-duration 150)` flashes the
   window in the `bell` color (white by default), fading out over that many
   milliseconds. Independently, an optional `bell-command` is run.
