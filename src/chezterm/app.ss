@@ -183,6 +183,7 @@
     (load-config config-file)
     (load-bindings!)
     (terminal-set-defaults! term (build-palette) (config-ref 'cursor-style) (config-ref 'cursor-blink))
+    (terminal-set-kitty-keyboard! term (config-ref 'kitty-keyboard))
     (read-padding!)
     (renderer-free! renderer)
     (set! renderer (create-renderer font))
@@ -921,6 +922,7 @@ Options:
         (set! term (make-terminal rows cols (config-ref 'scrollback) palette
                                   (config-ref 'cursor-style) (config-ref 'cursor-blink)))
         (terminal-set-cell-pixel-size! term (font-cell-width font) (font-cell-height font))
+        (terminal-set-kitty-keyboard! term (config-ref 'kitty-keyboard))
         (set! renderer (create-renderer font))
         (set! win (open-window on-window-event (or (opt 'title) (config-ref 'title))
                                (or (opt 'app-id) (config-ref 'app-id))

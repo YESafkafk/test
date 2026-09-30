@@ -46,6 +46,12 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - `wp_cursor_shape_v1` pointer cursors, with an XCursor theme fallback.
 - Keyboard handling through xkbcommon, including compose/dead keys, key repeat,
   application cursor/keypad modes and xterm-style modifier encoding.
+- The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
+  with all five progressive enhancements (disambiguated escape codes, press,
+  repeat and release events, shifted and base-layout keys, all keys as escape
+  codes, associated text), a flags stack per screen, and the `CSI ? u` query.
+  Programs such as Neovim, Helix, kakoune and fish use it to tell apart keys
+  like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
@@ -185,6 +191,11 @@ default, and all actions that can be bound to keys.
 (bind "ctrl+shift+t" spawn-new-instance)
 ```
 
+`(kitty-keyboard #f)` disables the kitty keyboard protocol: chezterm then
+ignores its control sequences and does not answer `CSI ? u`, so programs keep
+to the legacy (xterm) key encoding. Keys that trigger a chezterm binding are
+never sent, and neither are their releases.
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
@@ -307,8 +318,9 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
 - No client-side decorations: without `xdg-decoration` (e.g. on GNOME) the
   window has no title bar.
 - Fractional scaling is rounded to the next integer scale.
-- No Alacritty vi mode, hints UI, IME (`text-input-v3`) or kitty keyboard
-  protocol.
+- No Alacritty vi mode, hints UI or IME (`text-input-v3`).
+- The kitty keyboard protocol reports no Hyper and Meta modifiers (see the
+  roadmap).
 - Underline colors (SGR 58) are parsed but not drawn, so the terminfo entry
   does not advertise `Setulc`.
 

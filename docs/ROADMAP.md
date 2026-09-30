@@ -59,18 +59,26 @@ The font pixel size already comes from `scale`, which would become a rational.
 Pointer coordinates would be scaled by the same factor. The protocol XML
 files go into `protocols/` and the Makefile's `PROTOCOLS` list.
 
-### Kitty keyboard protocol
+### Kitty keyboard protocol (done)
 
-This allows progressive enhancement:
-- `CSI > flags u` / `CSI < u` push and pop the flags
-- `CSI = flags ; mode u` sets them
-- `CSI ? u` queries them.
-
-The terminal keeps a flags stack per screen. `encode-key` in `keyboard.ss`
-switches to the `CSI keycode ; mods u` encoding when the flags ask for it:
-disambiguate first, then report event types, alternate keys and all keys.
-The parser must only answer `CSI ? u` once this exists, because apps enable
-the protocol based on that reply.
+Implemented: all five enhancement flags, the per-screen flags stacks in
+`terminal.ss`, the encoder in `keyboard.ss` (tested against the
+specification's examples) and release/repeat events in `app.ss`. What is
+left:
+- **Hyper and Meta modifiers.** Their bits (16, 32) can be encoded, but
+  `keyboard-update-modifiers!` never sets them. Keymaps usually put Hyper and
+  Meta on the same real modifier as Super or Alt, so their xkb indices say
+  nothing on their own. kitty works out the mapping by walking the keymap
+  (`xkb_keymap_key_for_each`) and keeping only modifiers that do not
+  overlap.
+- **Soft reset.** `DECSTR` keeps the flags; only `RIS` empties the stacks.
+  kitty clears them on both.
+- **Keys without a legacy encoding.** With flags 0, keys such as
+  Ctrl+Shift+letter, media keys and modified F13–F35 are sent as before (or
+  not at all), because the legacy encoding must not change. kitty sends
+  `CSI u` for them even in legacy mode, which the specification allows.
+- **Keys held across a focus change.** No release is reported for a key
+  that is held when the window loses focus, as in kitty.
 
 ### Keyboard hints (Alacritty's "hints")
 

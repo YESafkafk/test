@@ -1,7 +1,8 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
+        (chezterm termenv) (only (chezterm config) config-ref)
+        (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
 (define passes 0)
@@ -542,6 +543,8 @@
   (feed t (esc "[u"))
   (check "kbd: SCORC after the kitty sequences" '(2 3) (cursor t))
   (check "kbd: SCORC keeps the flags" 1 (terminal-keyboard-flags t)))
+
+(check "kbd: enabled by default" #t (config-ref 'kitty-keyboard))
 
 (let ([t (make-term 3 10)])
   ;; disabled: no reply, and the flags stay 0
