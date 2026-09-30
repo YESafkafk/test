@@ -51,6 +51,7 @@
       (copy-on-select . #t)             ; selections go to the primary selection
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
+      (open-command . ("xdg-open"))     ; opens links and URLs; the URI is appended
       (hint-alphabet . "jfkdls;ahgurieowpq") ; characters of the keyboard hint labels
       (colors
        . ((foreground . "#d8d8d8")
@@ -127,7 +128,7 @@
                                            (cons (car c) (cdr c))))
                            args)))]
         [(shell bell-command) (cons key (if (equal? args '(#f)) #f args))]
-        [(padding env) (cons key args)]
+        [(padding env open-command) (cons key args)]
         [else (cons key (if (and (pair? args) (null? (cdr args))) (car args) args))])))
 
   (define (load-config path)

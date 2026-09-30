@@ -567,8 +567,10 @@
 
   (define (run-hint-action! action t)
     (case action
-      [(hint-open) (spawn-detached (list "xdg-open" (uri-to-open (target-uri t) hostname)) #f)]
+      [(hint-open) (open-uri! (uri-to-open (target-uri t) hostname))]
       [(hint-copy) (window-set-clipboard! win 'clipboard (target-uri t))]
+      ;; as if pasted, so bracketed paste applies (Alacritty's Paste)
+      [(hint-paste) (paste-text! (target-uri t))]
       [(hint-select)
        (let ([s (target-start t)] [e (target-end t)])
          (terminal-set-selection! term (vector 'stream (car s) (cdr s) (car e) (- (cdr e) 1)))
@@ -599,13 +601,21 @@
       [(toggle-fullscreen) (window-toggle-fullscreen! win)]
       [(search-forward) (start-search! #f)]
       [(search-backward) (start-search! #t)]
-      [(hint-open hint-copy hint-select) (start-hints! action)]
+      [(hint-open hint-copy hint-paste hint-select) (start-hints! action)]
       [(quit) (set! quit? #t)]
       [(none) (void)]
       [else
        (cond
          [(string? action) (send! action)]
          [else (warn "unknown action ~s" action)])]))
+
+  ;; Open URI with the open-command, the URI appended as its last argument
+  ;; (as Alacritty's hint command).
+  (define (open-uri! uri)
+    (let ([cmd (config-ref 'open-command)])
+      (if (and (pair? cmd) (for-all string? cmd))
+          (spawn-detached (append cmd (list uri)) #f)
+          (warn "invalid open-command ~s: a list of strings needed" cmd))))
 
   (define last-bell -1000)
 
@@ -715,7 +725,7 @@
                (cond
                  [(and ctrl (= click-count 1)
                        (let ([url (url-at term pt)]) (and url (uri-to-open url hostname))))
-                  => (lambda (url) (spawn-detached (list "xdg-open" url) #f))]
+                  => open-uri!]
                  [else
                   (set! select-anchor pt)
                   (set! select-block ctrl)

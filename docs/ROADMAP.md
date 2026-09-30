@@ -83,7 +83,7 @@ left:
 
 ### Keyboard hints (Alacritty's "hints") (done)
 
-`hint-open`, `hint-copy` and `hint-select` label the OSC 8 links and URLs
+`hint-open`, `hint-copy`, `hint-paste` and `hint-select` label the OSC 8 links and URLs
 on screen (`hint-targets` in `selection.ss`), with Alacritty's labels and
 key handling (`hints.ss`); the renderer draws labels as highlight entries.
 Like Alacritty, the targets are found again on every frame, so labels
@@ -93,8 +93,10 @@ follow output and scrolling. What is left:
   has no regex library, so targets come from built-in matchers; more
   matchers (paths, hashes, IP addresses) could be added to
   `span-targets` the way URLs are, with a way to choose them per binding.
-- **More actions**: pasting the target, or running a configured command
-  on it instead of `xdg-open`.
+- **A command per hint.** `hint-paste` pastes the target and
+  `open-command` replaces `xdg-open` (as Alacritty's `Paste` and
+  `command`), but there is one command for all links; Alacritty gives
+  every hint its own. That would come with user-defined hints.
 
 ### IME (`zwp_text_input_v3`)
 

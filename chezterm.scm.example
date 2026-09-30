@@ -54,10 +54,13 @@
 (copy-on-select #t)              ; selections go to the primary selection
 (word-separators ",│`|:\"' ()[]{}<>\t")
 
-;;; Keyboard hints -----------------------------------------------------------
-;;; hint-open, hint-copy and hint-select (see the key bindings below) label
-;;; every OSC 8 link and URL on screen; typing a label runs the action on
-;;; it, Backspace removes the last key typed, Escape leaves.
+;;; Links & keyboard hints ---------------------------------------------------
+(open-command "xdg-open")        ; opens links and URLs (Ctrl+click, hint-open);
+                                 ; the URI is appended as the last argument,
+                                 ; e.g. (open-command "firefox" "--new-window")
+;;; hint-open, hint-copy, hint-paste and hint-select (see the key bindings
+;;; below) label every OSC 8 link and URL on screen; typing a label runs
+;;; the action on it, Backspace removes the last key typed, Escape leaves.
 (hint-alphabet "jfkdls;ahgurieowpq") ; label characters: the first half
                                  ; (rounded down, of all but one) ends a
                                  ; label, the rest begins longer ones
@@ -91,9 +94,11 @@
 ;;;   scroll-half-page-down scroll-line-up scroll-line-down scroll-to-top
 ;;;   scroll-to-bottom clear-history clear-selection reset spawn-new-instance
 ;;;   toggle-fullscreen search-forward search-backward
-;;;   hint-open (open a link or URL with xdg-open; http, https, ftp, file
-;;;   and mailto only), hint-copy (copy its URI to the clipboard),
-;;;   hint-select (select its text)  quit none
+;;;   hint-open (open a link or URL with the open-command; http, https,
+;;;   ftp, file and mailto only), hint-copy (copy its URI to the
+;;;   clipboard), hint-paste (paste its URI into the program, with
+;;;   bracketed paste if the program asked for it), hint-select (select
+;;;   its text)  quit none
 ;;; or a string, which is sent to the program as if typed.
 ;;; Your bindings take precedence over the defaults:
 ;;;   ctrl+shift+c copy            ctrl+shift+v paste
@@ -111,4 +116,5 @@
 ;; (bind "ctrl+shift+t" spawn-new-instance)
 ;; (bind "ctrl+shift+l" "ls -l\r")
 ;; (bind "ctrl+shift+s" hint-select)
+;; (bind "ctrl+shift+p" hint-paste)
 ;; (bind "f11" none)

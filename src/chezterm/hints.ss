@@ -45,9 +45,9 @@
                                   [else (cons (+ (car rest) 1) (cdr rest))]))))
                   (cons (list->string (map (lambda (i) (vector-ref chars i)) (reverse indices))) acc))))))
 
-  ;; ACTION is what picking a target does (hint-open, hint-copy or
-  ;; hint-select), TARGETS a vector in reading order, LABELS the vector of
-  ;; their labels, TYPED the keys typed so far.
+  ;; ACTION is what picking a target does (hint-open, hint-copy,
+  ;; hint-paste or hint-select), TARGETS a vector in reading order, LABELS
+  ;; the vector of their labels, TYPED the keys typed so far.
   (define-record-type hint-state (fields action alphabet targets labels typed))
 
   ;; The shortest labels go to the last targets, those nearest the bottom

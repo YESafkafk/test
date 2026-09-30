@@ -1,7 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref)
+        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref config-normalize)
         (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
@@ -841,7 +841,15 @@
          (let ([h (make-hashtable equal-hash equal?)]) (for-each (lambda (k) (hashtable-set! h k #t)) keys)
            (hashtable-size h)))
   (check "default bindings: hints" '(hint-open hint-copy)
-         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y"))))
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y")))
+  (check "default bindings: hint-paste and hint-select not bound" '()
+         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
+
+;;; open-command: a list of strings, the URI is appended to it
+(check "open-command: default" '("xdg-open") (config-ref 'open-command))
+(check "open-command: one string" '(open-command "firefox") (config-normalize '(open-command "firefox")))
+(check "open-command: with arguments" '(open-command "firefox" "--new-window")
+       (config-normalize '(open-command "firefox" "--new-window")))
 
 ;;; hint labels
 (check "hint labels: Alacritty's sequence"

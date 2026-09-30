@@ -36,8 +36,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
-- **Ctrl+click on links and URLs** opens them with `xdg-open`: OSC 8
-  hyperlinks first, then URLs found in the text. Only `http`, `https`,
+- **Ctrl+click on links and URLs** opens them with the `open-command`
+  (`xdg-open` by default): OSC 8 hyperlinks first, then URLs found in the text. Only `http`, `https`,
   `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
   from the program. As in kitty, a `file://` URI is only opened when its
   host is empty, `localhost` or this machine's name, and is passed on
@@ -45,8 +45,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   also where it continues on another row, and shows a hand.
 - **Keyboard hints**, as in Alacritty: Ctrl+Shift+O labels every link and
   URL on screen (also scrolled back) with a short key sequence, and typing
-  one opens it; Ctrl+Shift+Y copies it instead, and `hint-select` selects
-  its text. Typed keys narrow the labels down, Backspace takes one back,
+  one opens it; Ctrl+Shift+Y copies it instead, `hint-paste` pastes it
+  into the program and `hint-select` selects its text. Typed keys narrow the labels down, Backspace takes one back,
   Escape leaves. Nothing typed in hint mode reaches the program.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
@@ -217,11 +217,25 @@ Every other key is encoded exactly as before.
 
 ### Keyboard hints
 
-`hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y) and `hint-select`
-(not bound) label every target on screen: each OSC 8 link once, however
-many runs or rows it takes, and every URL found in the text, also where it
-wraps onto the next row. `hint-open` labels only what Ctrl+click would
-open. Labels are made of `hint-alphabet`'s characters, as in Alacritty,
+`hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y), `hint-paste` and
+`hint-select` (not bound) label every target on screen: each OSC 8 link
+once, however many runs or rows it takes, and every URL found in the
+text, also where it wraps onto the next row. Typing a label runs the
+action on its target's URI: for a URL found in the text, that is its
+text, and for an OSC 8 link, the link's URI.
+- `hint-open` labels only what Ctrl+click would open, and runs the
+  `open-command` with the URI appended as the last argument, as
+  Alacritty's hint `command` does. Ctrl+click uses the same command:
+
+  ```scheme
+  (open-command "firefox" "--new-window")   ; default: (open-command "xdg-open")
+  ```
+- `hint-copy` copies the URI to the clipboard.
+- `hint-paste` writes the URI to the program as if it had been pasted, as
+  Alacritty's `Paste` action does, so bracketed paste applies.
+- `hint-select` selects the target's text.
+
+Labels are made of `hint-alphabet`'s characters, as in Alacritty,
 and no label is a prefix of another: the shortest ones go to the targets
 nearest the bottom of the screen. The keys typed so far are drawn in
 `hint-typed-foreground`/`hint-typed-background`, the rest in
@@ -290,6 +304,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 | Ctrl+Shift+F / Ctrl+Shift+B | search forward / backward (Enter: next, Shift+Enter: previous, Esc: exit) |
 | Ctrl+Shift+O | open a link or URL with keyboard hints (`hint-open`) |
 | Ctrl+Shift+Y | copy a link's or URL's URI with keyboard hints (`hint-copy`) |
+| (not bound) | paste a link's or URL's URI into the program with keyboard hints (`hint-paste`) |
 | (not bound) | select a link's or URL's text with keyboard hints (`hint-select`) |
 | Ctrl+Shift+K | clear the scrollback |
 | Ctrl+Shift+N | open a new window in the current directory |
@@ -297,7 +312,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 
 Mouse: drag to select, double/triple click for words/lines, Ctrl+drag for a block,
 right click to extend. Hold Shift to select while an application uses the mouse.
-Ctrl+click opens links and URLs.
+Ctrl+click opens links and URLs with the `open-command`.
 
 ## How it is built
 
