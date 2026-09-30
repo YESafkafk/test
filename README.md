@@ -61,7 +61,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     background); glyphs that overhang their cell are composited afterwards
   - only the rows a buffer is missing are copied into it, and only changed
     regions are reported to the compositor
-  - rendering is paced by frame callbacks.
+  - rendering is paced by frame callbacks, and spaced out while output floods
+    in, so that parsing gets most of the time.
 
 ## Requirements
 
@@ -295,9 +296,9 @@ Source layout (`src/chezterm/`):
 
 Everything is compiled with Chez's `optimize-level 2`, which keeps run-time
 type and bounds checks, so a bug raises an error instead of corrupting
-memory. `seq 1 2000000` takes about 3 s in chezterm, against 1 s for
-`script` writing to `/dev/null`. Redrawing a full 250×75 screen of colored
-text (2254×1354 pixels) takes about 6.5 ms. See
+memory. In a 1920×1080 window, `seq 1 2000000` takes about 3.4 s in
+chezterm, against 0.9 s for `script` writing to `/dev/null`. Redrawing a
+full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for measurements.
 
 ## Limitations
