@@ -2,7 +2,9 @@
 ;;; search matches and URLs.  Rows are absolute (see terminal-abs-row).
 (library (chezterm selection)
   (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
-          line-text line-matches url-at link-id-at link-ranges openable-url?)
+          line-text line-matches url-at text-url-at link-id-at link-ranges openable-url?
+          target? target-uri target-start target-end target-label target-link
+          hint-targets text-url-target-at target-ranges)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
 
   (define (line-at-abs term abs)
@@ -167,40 +169,204 @@
     (or (terminal-link-uri term (link-id-at term pt))
         (text-url-at term pt)))
 
+  ;; The URL found in the text at PT, or #f.
   (define (text-url-at term pt)
-    (let ([l (line-at-abs term (car pt))])
-      (and l
-           (let* ([cols (line-cols l)]
-                  [text (list->string (map (lambda (i) (cell-char l i)) (iota cols)))]
-                  [col (cdr pt)])
-             (let loop ([schemes '("https://" "http://" "file://" "ftp://" "mailto:")])
-               (and (pair? schemes)
-                    (or (let find ([from 0])
-                          (let ([i (string-search text (car schemes) from)])
-                            (and i
-                                 (let ([end (let e ([j i])
-                                              (if (and (< j cols)
-                                                       (not (memv (string-ref text j)
-                                                                  '(#\space #\" #\' #\< #\> #\` #\tab))))
-                                                  (e (+ j 1)) j))])
-                                   (if (and (<= i col) (< col end))
-                                       (string-trim-url (substring text i end))
-                                       (find end))))))
-                        (loop (cdr schemes)))))))))
+    (let ([t (text-url-target-at term pt)]) (and t (target-uri t))))
 
-  (define (string-search s pat from)
-    (let ([n (string-length s)] [m (string-length pat)])
-      (let loop ([i from])
-        (cond [(> (+ i m) n) #f]
-              [(string=? (substring s i (+ i m)) pat) i]
-              [else (loop (+ i 1))]))))
+  ;;; Targets: OSC 8 links and URLs found in the text ----------------------
 
-  (define (string-trim-url u)
-    ;; drop trailing punctuation that is rarely part of a URL
-    (let loop ([u u])
-      (if (and (> (string-length u) 0)
-               (memv (string-ref u (- (string-length u) 1)) '(#\. #\, #\; #\: #\) #\] #\!)))
-          (loop (substring u 0 (- (string-length u) 1)))
-          u)))
+  ;; What keyboard hints label and Ctrl+hover underlines.  START is the
+  ;; (abs . col) of the first cell, END the (abs . col) just past the last
+  ;; one (the column is exclusive, the row is the last cell's), LABEL the
+  ;; (abs . col) of the first visible cell, LINK the OSC 8 link id (0 for a
+  ;; URL found in the text).
+  (define-record-type target (fields uri start end label link))
+
+  ;; A logical line is followed at most this many rows beyond the rows it
+  ;; is looked at from (as in Alacritty).
+  (define max-wrap-lines 100)
+
+  ;; First and last absolute row of the logical line containing ABS, at
+  ;; most max-wrap-lines rows above LO and below HI.
+  (define (logical-span term abs lo hi)
+    (cons (let loop ([a abs])
+            (let ([prev (and (> a (- lo max-wrap-lines)) (line-at-abs term (- a 1)))])
+              (if (and prev (line-wrapped prev)) (loop (- a 1)) a)))
+          (let loop ([a abs])
+            (let ([l (line-at-abs term a)])
+              (if (and l (line-wrapped l) (< a (+ hi max-wrap-lines)) (line-at-abs term (+ a 1)))
+                  (loop (+ a 1))
+                  a)))))
+
+  ;; The text of absolute rows [from, to] with one character per cell,
+  ;; empty cells as spaces.  The second halves of wide characters are left
+  ;; out, and so is the blank a wrapped row ends with when a wide character
+  ;; did not fit.  Returns (values text rows cols ends links): for each
+  ;; character its absolute row, its column, the column after it and its
+  ;; OSC 8 link id.
+  (define (span-text term from to)
+    (let loop ([abs to] [chars '()] [rows '()] [cols '()] [ends '()] [links '()])
+      (if (< abs from)
+          (values (list->string chars) (list->vector rows) (list->vector cols)
+                  (list->vector ends) (list->vector links))
+          (let* ([l (line-at-abs term abs)] [v (line-cells l)] [n (line-cols l)]
+                 [ex (line-extra l)]
+                 [next (and (line-wrapped l) (< abs to) (line-at-abs term (+ abs 1)))]
+                 [n (if (and next (> n 1) (cell-empty? v (- n 1))
+                             (> (line-cols next) 0)
+                             (fxlogtest (cell-attrs (line-cells next) 0) ATTR-WIDE))
+                        (- n 1)
+                        n)])
+            (let cell ([i (- n 1)] [chars chars] [rows rows] [cols cols] [ends ends] [links links])
+              (cond
+                [(< i 0) (loop (- abs 1) chars rows cols ends links)]
+                [(fxlogtest (cell-attrs v i) ATTR-SPACER) (cell (- i 1) chars rows cols ends links)]
+                [else
+                 (cell (- i 1) (cons (cell-char l i) chars) (cons abs rows) (cons i cols)
+                       (cons (if (fxlogtest (cell-attrs v i) ATTR-WIDE) (min n (+ i 2)) (+ i 1)) ends)
+                       (cons (if ex (line-link l i) 0) links))]))))))
+
+  (define url-schemes '("https://" "http://" "file://" "ftp://" "mailto:"))
+
+  ;; Characters a URL ends before, as in Alacritty's URL hint regex.
+  (define (url-char? c)
+    (not (or (char<=? c #\space) (char<=? #\x7f c #\x9f) (char-whitespace? c)
+             (memv c '(#\" #\' #\< #\> #\` #\{ #\| #\} #\^ #\\ #\x27E8 #\x27E9)))))
+
+  (define (prefix-at? s i pat)
+    (let ([m (string-length pat)])
+      (and (<= (+ i m) (string-length s))
+           (let loop ([k 0])
+             (or (= k m) (and (char=? (string-ref s (+ i k)) (string-ref pat k)) (loop (+ k 1))))))))
+
+  ;; The end of the URL in TEXT from START (after its scheme SCHEME-END) to
+  ;; RAW-END, after Alacritty's hint post-processing: an unbalanced ) or ]
+  ;; ends it, and trailing characters that are more likely punctuation
+  ;; around it than part of it are dropped.
+  (define (url-end text start raw-end)
+    (let* ([end (let loop ([i start] [parens 0] [brackets 0])
+                  (if (= i raw-end)
+                      i
+                      (case (string-ref text i)
+                        [(#\() (loop (+ i 1) (+ parens 1) brackets)]
+                        [(#\[) (loop (+ i 1) parens (+ brackets 1))]
+                        [(#\)) (if (= parens 0) i (loop (+ i 1) (- parens 1) brackets))]
+                        [(#\]) (if (= brackets 0) i (loop (+ i 1) parens (- brackets 1)))]
+                        [else (loop (+ i 1) parens brackets)])))])
+      (let loop ([end end])
+        (if (and (> end (+ start 1))
+                 (memv (string-ref text (- end 1)) '(#\. #\, #\: #\; #\? #\! #\( #\[ #\')))
+            (loop (- end 1))
+            end))))
+
+  ;; The URLs in TEXT: a list of (start . end), end exclusive.  LINKS holds
+  ;; the link id of each character: a URL never crosses the start or end of
+  ;; a link.
+  (define (url-spans text links)
+    (let ([n (string-length text)])
+      (let loop ([i 0] [acc '()])
+        (if (>= i n)
+            (reverse acc)
+            (let ([scheme (find (lambda (s) (prefix-at? text i s)) url-schemes)])
+              (if (not scheme)
+                  (loop (+ i 1) acc)
+                  (let* ([body (+ i (string-length scheme))]
+                         [id (vector-ref links i)]
+                         [raw-end (let e ([j (+ i 1)])
+                                    (if (and (< j n) (= id (vector-ref links j))
+                                             (or (< j body) (url-char? (string-ref text j))))
+                                        (e (+ j 1))
+                                        j))]
+                         [end (url-end text i raw-end)])
+                    (if (> end body)
+                        (loop end (cons (cons i end) acc))
+                        (loop (+ i 1) acc)))))))))
+
+  ;; The targets of absolute rows [from, to], a logical line or part of
+  ;; one, that have a cell in the rows [top, bottom].  Links whose id is in
+  ;; SEEN are left out, and the others are added to it: a link gets one
+  ;; target, at its first visible run.  A URL found in the text of a link
+  ;; is left out as well, since the link is what Ctrl+click opens there.
+  (define (span-targets term from to top bottom seen)
+    (let-values ([(text rows cols ends links) (span-text term from to)])
+      (let* ([n (string-length text)]
+             [visible (lambda (i j)       ; the first visible character in [i, j)
+                        (let loop ([k i])
+                          (cond [(or (= k j) (> (vector-ref rows k) bottom)) #f]
+                                [(>= (vector-ref rows k) top) k]
+                                [else (loop (+ k 1))])))]
+             [make (lambda (uri i j link)
+                     (let ([k (visible i j)])
+                       (and k (make-target uri
+                                           (cons (vector-ref rows i) (vector-ref cols i))
+                                           (cons (vector-ref rows (- j 1)) (vector-ref ends (- j 1)))
+                                           (cons (vector-ref rows k) (vector-ref cols k))
+                                           link))))]
+             [link-targets
+              (let loop ([i 0] [acc '()])
+                (if (= i n)
+                    acc
+                    (let ([id (vector-ref links i)])
+                      (if (= id 0)
+                          (loop (+ i 1) acc)
+                          (let* ([j (let e ([j (+ i 1)]) (if (and (< j n) (= id (vector-ref links j))) (e (+ j 1)) j))]
+                                 [uri (and (not (hashtable-ref seen id #f)) (terminal-link-uri term id))]
+                                 [t (and uri (make uri i j id))])
+                            (when t (hashtable-set! seen id #t))
+                            (loop j (if t (cons t acc) acc)))))))])
+        (fold-left (lambda (acc s)
+                     (let ([i (car s)] [j (cdr s)])
+                       (if (terminal-link-uri term (vector-ref links i))
+                           acc
+                           (let ([t (make (substring text i j) i j 0)]) (if t (cons t acc) acc)))))
+                   link-targets
+                   (url-spans text links)))))
+
+  (define (label<? a b)
+    (let ([p (target-label a)] [q (target-label b)])
+      (or (< (car p) (car q)) (and (= (car p) (car q)) (< (cdr p) (cdr q))))))
+
+  ;; The targets in TERM's view (also when it is scrolled back), in the
+  ;; order of their first visible cells.
+  (define (hint-targets term)
+    (let* ([rows (terminal-rows term)]
+           [top (terminal-abs-row term (- (terminal-display-offset term)))]
+           [bottom (+ top rows -1)]
+           [seen (make-eqv-hashtable)])
+      (let loop ([abs top] [acc '()])
+        (if (> abs bottom)
+            (list-sort label<? acc)
+            (let ([span (logical-span term abs top bottom)])
+              (loop (+ (cdr span) 1)
+                    (append (span-targets term (if (= abs top) (car span) abs) (cdr span) top bottom seen)
+                            acc)))))))
+
+  ;; The URL found in the text at PT, as a target, or #f.
+  (define (text-url-target-at term pt)
+    (let ([abs (car pt)] [col (cdr pt)])
+      (and (line-at-abs term abs)
+           (let ([span (logical-span term abs abs abs)])
+             (let-values ([(text rows cols ends links) (span-text term (car span) (cdr span))])
+               (let ([k (let loop ([k 0])
+                          (cond [(= k (vector-length rows)) #f]
+                                [(and (= abs (vector-ref rows k)) (<= (vector-ref cols k) col)
+                                      (< col (vector-ref ends k)))
+                                 k]
+                                [else (loop (+ k 1))]))])
+                 (and k
+                      (let ([s (find (lambda (s) (and (<= (car s) k) (< k (cdr s)))) (url-spans text links))])
+                        (and s
+                             (make-target (substring text (car s) (cdr s))
+                                          (cons (vector-ref rows (car s)) (vector-ref cols (car s)))
+                                          (cons (vector-ref rows (- (cdr s) 1)) (vector-ref ends (- (cdr s) 1)))
+                                          pt 0))))))))))
+
+  ;; Column ranges ((c0 c1)), end exclusive, of target T's cells in
+  ;; absolute row ABS of a terminal with COLS columns.
+  (define (target-ranges t abs cols)
+    (let ([s (target-start t)] [e (target-end t)])
+      (if (<= (car s) abs (car e))
+          (list (list (if (= abs (car s)) (cdr s) 0) (if (= abs (car e)) (cdr e) cols)))
+          '())))
 
 )

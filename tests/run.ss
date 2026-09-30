@@ -744,6 +744,81 @@
    "ssh://host" "data:text/html,x" "x-man-page://ls" "no-scheme" "" "https")
  '(#t #t #t #t #t #t #f #f #f #f #f #f #f))
 
+;;; hint targets: OSC 8 links and URLs found in the text, as
+;;; (uri start end label link?) with screen rows (negative in the history)
+(define (targets t)
+  (map (lambda (x)
+         (let ([rel (lambda (p) (cons (terminal-rel-row t (car p)) (cdr p)))])
+           (list (target-uri x) (rel (target-start x)) (rel (target-end x)) (rel (target-label x))
+                 (> (target-link x) 0))))
+       (hint-targets t)))
+
+(let ([t (make-term 3 20)])
+  (feed t (osc8 "id=a" "http://a/") "ab" (osc8 "" "") " " (osc8 "id=a" "http://a/") "cd" (osc8 "" "")
+        " " (osc8 "" "http://b/") "ef" (osc8 "" "") " " (osc8 "" "javascript:x()") "js" (osc8 "" ""))
+  (check "targets: one per link id, at its first run"
+         '(("http://a/" (0 . 0) (0 . 2) (0 . 0) #t) ("http://b/" (0 . 6) (0 . 8) (0 . 6) #t)
+           ("javascript:x()" (0 . 9) (0 . 11) (0 . 9) #t))
+         (targets t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "12345" (osc8 "" "http://wrap/") "abcdefgh" (osc8 "" "") " x")
+  (check "targets: link wrapping onto the next row"
+         '(("http://wrap/" (0 . 5) (1 . 3) (0 . 5) #t)) (targets t)))
+
+(let ([t (make-term 6 20)])
+  (feed t "see https://example.com/some/long/path ok\r\nhttp://two/ and (https://en.wikipedia.org/wiki/Foo_(bar)).")
+  (check "targets: wrapped URL, brackets balanced, punctuation dropped"
+         '(("https://example.com/some/long/path" (0 . 4) (1 . 18) (0 . 4) #f)
+           ("http://two/" (3 . 0) (3 . 11) (3 . 0) #f))
+         (list-head (targets t) 2))
+  (check "text-url-at: wrapped part" "https://example.com/some/long/path"
+         (text-url-at t (cons (terminal-abs-row t 1) 5)))
+  (check "text-url-at: first part" "https://example.com/some/long/path"
+         (url-at t (cons (terminal-abs-row t 0) 19)))
+  (check "text-url-at: after the URL" #f (text-url-at t (cons (terminal-abs-row t 1) 19)))
+  (check "targets: URL cut off at the bottom" "https://en.wikipedia.org/wiki/Foo_(bar)"
+         (let ([t2 (make-term 6 50)])
+           (feed t2 "(https://en.wikipedia.org/wiki/Foo_(bar)).")
+           (target-uri (car (hint-targets t2)))))
+  (check "target-ranges: wrapped URL" '(((4 20)) ((0 18)) ())
+         (map (lambda (r) (target-ranges (car (hint-targets t)) (terminal-abs-row t r) 20)) '(0 1 2))))
+
+;; scrolled back: only what is visible, and a URL that starts above the
+;; view gets its label at the first visible cell
+(let ([t (make-term 3 20 100)])
+  (feed t "https://top.example/\r\n" "a https://a.example/xyz\r\nline\r\n" "b http://b/\r\n4\r\n5\r\n6")
+  (check "targets: bottom of the screen" '() (targets t))
+  (terminal-scroll-display! t 3)
+  (check "targets: scrolled back"
+         '(("https://a.example/xyz" (-4 . 2) (-3 . 3) (-3 . 0) #f) ("http://b/" (-1 . 2) (-1 . 11) (-1 . 2) #f))
+         (targets t))
+  (terminal-scroll-display! t 2)
+  (check "targets: scrolled to the top"
+         '(("https://top.example/" (-5 . 0) (-5 . 20) (-5 . 0) #f) ("https://a.example/xyz" (-4 . 2) (-3 . 3) (-4 . 2) #f))
+         (targets t)))
+
+;; URLs next to OSC 8 links
+(let ([t (make-term 3 60)])
+  (feed t (osc8 "" "https://explicit/") "see https://inside.example/" (osc8 "" "") "https://after.example/ "
+        (osc8 "" "http://l/") "link" (osc8 "" "") " https://plain.example/")
+  (check "targets: URLs next to links"
+         '(("https://explicit/" (0 . 0) (0 . 27) (0 . 0) #t) ("https://after.example/" (0 . 27) (0 . 49) (0 . 27) #f)
+           ("http://l/" (0 . 50) (0 . 54) (0 . 50) #t) ("https://plain.example/" (0 . 55) (1 . 17) (0 . 55) #f))
+         (targets t)))
+
+;; wide characters: in a URL, in a link, and a wide character that did not
+;; fit at the end of a wrapped row
+(let ([t (make-term 4 30)])
+  (feed t "日本 https://例え.jp/パス x " (osc8 "" "http://w/") "日" (osc8 "" "") "\r\n"
+        "https://abcdefghijklmnopqrstu日本 x")
+  (check "targets: wide characters"
+         '(("https://例え.jp/パス" (0 . 5) (0 . 25) (0 . 5) #f) ("http://w/" (0 . 28) (0 . 30) (0 . 28) #t)
+           ("https://abcdefghijklmnopqrstu日本" (1 . 0) (2 . 4) (1 . 0) #f))
+         (targets t))
+  (check "text-url-at: second half of a wide character" "https://例え.jp/パス"
+         (text-url-at t (cons (terminal-abs-row t 0) 24))))
+
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
   (define (query) (set! responses '()) (feed t (esc "[?u")) responses)
