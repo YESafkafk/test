@@ -9,7 +9,7 @@
           renderer-pixels renderer-width renderer-height renderer-stride
           renderer-invalidate! renderer-set-font! renderer-font
           renderer-cols renderer-rows renderer-set-padding! renderer-free!
-          renderer-tile-count)
+          renderer-tile-count renderer-set-hint-colors!)
   (import (chezscheme) (chezterm ffi) (chezterm grid) (chezterm terminal) (chezterm font))
 
 ;; The image is composited with pixman: backgrounds are filled in runs,
@@ -35,7 +35,8 @@
             opacity                          ; 0-255
             bold-is-bright
             selection-fg selection-bg
-            hollow-unfocused)
+            hollow-unfocused
+            (mutable hint-colors))           ; #(fg bg typed-fg typed-bg) of hint labels
     (protocol
      (lambda (new)
        (lambda (font pad-x pad-y opacity bold-is-bright sel-fg sel-bg hollow)
@@ -45,7 +46,8 @@
               (make-vector tile-slots #f) (make-bytevector tile-slots 0) 0 0
               (make-eq-hashtable) (make-fxvector 0) (make-fxvector 0)
               (max 0 (min 255 (exact (round (* 255 opacity)))))
-              bold-is-bright sel-fg sel-bg hollow)))))
+              bold-is-bright sel-fg sel-bg hollow
+              (vector #x181818 #xF4BF75 #x181818 #xAC4242))))))
 
   (define (renderer-cols r)
     (max 1 (fxquotient (fx- (renderer-width r) (fx* 2 (renderer-pad-x r)))
@@ -82,6 +84,11 @@
     (clear-tiles! r)
     (clear-glyph-images! r)
     (renderer-font-set! r font)
+    (renderer-invalidate! r))
+
+  ;; Colors of the hint labels: the keys still to type and those typed.
+  (define (renderer-set-hint-colors! r fg bg typed-fg typed-bg)
+    (renderer-hint-colors-set! r (vector fg bg typed-fg typed-bg))
     (renderer-invalidate! r))
 
   (define (renderer-set-padding! r x y)
@@ -368,8 +375,10 @@
 
   ;; Render TERM.  HIGHLIGHTS is a procedure mapping an absolute row to a
   ;; list of column ranges: (c0 c1 current?) for search matches, drawn with
-  ;; a highlighted background, and (c0 c1 link) for a hovered link, drawn
-  ;; underlined.  OVERLAY, when not #f, is a line drawn instead of the
+  ;; a highlighted background, (c0 c1 link) for a hovered link, drawn
+  ;; underlined, and (c0 c1 text typed) for a hint label: the characters of
+  ;; TEXT drawn over the cells [c0, c1) in the hint colors, the first TYPED
+  ;; of them in the typed ones.  OVERLAY, when not #f, is a line drawn instead of the
   ;; bottom row (the search prompt).  Returns a list of damaged (y0 . y1)
   ;; pixel row ranges, empty when nothing changed.
   (define (renderer-render! r term focused? blink-on? highlights overlay)
@@ -596,7 +605,38 @@
              (fill-rect! r x y0 (fx+ x 1) y1 pixel)
              (fill-rect! r (fx- x1 1) y0 x1 y1 pixel)]
             [(eq? cursor-style 'beam) (fill-rect! r x y0 (fx+ x t) y1 pixel)]
-            [else (fill-rect! r x (fx- y1 t) x1 y1 pixel)])))))
+            [else (fill-rect! r x (fx- y1 t) x1 y1 pixel)])))
+      ;; hint labels, over everything else
+      (when (pair? hl)
+        (for-each (lambda (h) (when (string? (caddr h)) (draw-label! r v h ncols y0 y1))) hl))))
+
+  ;; Draw hint label H, (c0 c1 text typed), over the cells V of the row at
+  ;; pixel rows [y0, y1).  A label that ends on the first half of a wide
+  ;; character covers its second half with the label's background.
+  (define (draw-label! r v h ncols y0 y1)
+    (let* ([font (renderer-font r)]
+           [cw (font-cell-width font)]
+           [px (renderer-pad-x r)]
+           [colors (renderer-hint-colors r)]
+           [c0 (car h)] [text (caddr h)] [typed (cadddr h)]
+           [n (string-length text)]
+           [bg-of (lambda (k) (argb (vector-ref colors (if (fx< k typed) 3 1)) 255))])
+      (do ([k 0 (fx+ k 1)]) ((or (fx= k n) (fx>= (fx+ c0 k) ncols)))
+        (let ([x (fx+ px (fx* (fx+ c0 k) cw))]
+              [fg (vector-ref colors (if (fx< k typed) 2 0))]
+              [bg (bg-of k)]
+              [cp (char->integer (string-ref text k))])
+          (fill-rect! r x y0 (fx+ x cw) y1 bg)
+          (when (fx> cp 32)
+            (let ([t (cell-tile r cp #f 0 fg bg cw)])
+              (if (and (fixnum? t) (fx<= (fx+ x cw) (renderer-width r)))
+                  (pixman_blt t (renderer-pixels r) cw (renderer-width r) 32 32 0 0 x y0 cw (fx- y1 y0))
+                  (draw-glyph! r (if (fixnum? t) (font-get-glyph font cp 0) t)
+                               x (fx+ y0 (font-baseline font)) fg y0 y1))))))
+      (let ([last (fx+ c0 (fx- n 1))])
+        (when (and (fx> n 0) (fx< (fx+ last 1) ncols) (fxlogtest (cell-attrs v last) ATTR-WIDE))
+          (let ([x (fx+ px (fx* (fx+ last 1) cw))])
+            (fill-rect! r x y0 (fx+ x cw) y1 (bg-of (fx- n 1))))))))
 
   (define (draw-underline! r style x0 x1 y0 y1 rgb)
     (let* ([font (renderer-font r)]

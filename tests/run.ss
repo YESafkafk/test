@@ -1,7 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (only (chezterm config) config-ref)
+        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref)
         (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
@@ -743,6 +743,180 @@
  '("http://a/" "https://a/" "HTTPS://a/" "ftp://a/" "file:///tmp/x" "mailto:a@b" "javascript:alert(1)"
    "ssh://host" "data:text/html,x" "x-man-page://ls" "no-scheme" "" "https")
  '(#t #t #t #t #t #t #f #f #f #f #f #f #f))
+
+;; what xdg-open gets: file URIs only on this machine (as in kitty), without
+;; their host
+(for-each
+ (lambda (u expected)
+   (check (format "uri-to-open ~a" u) expected (uri-to-open u "myhost")))
+ '("https://a/x" "javascript:alert(1)" "file:///tmp/x" "file:/tmp/x" "file://localhost/tmp/x"
+   "file://myhost/tmp/a%20b?q#f" "file://myhost:22/tmp/x" "file://other/tmp/x" "file://MYHOST/tmp/x"
+   "FILE://localhost/tmp/x" "file://localhost" "file://localhost?q" "file://:1/x" "file://user@myhost/x"
+   "file://otherhost")
+ '("https://a/x" #f "file:///tmp/x" "file:/tmp/x" "file:///tmp/x"
+   "file:///tmp/a%20b?q#f" "file:///tmp/x" #f #f
+   "file:///tmp/x" "file://" "file://?q" "file:///x" #f
+   #f))
+(check "uri-to-open: empty host name" #f (uri-to-open "file://other/x" ""))
+
+;;; hint targets: OSC 8 links and URLs found in the text, as
+;;; (uri start end label link?) with screen rows (negative in the history)
+(define (targets t)
+  (map (lambda (x)
+         (let ([rel (lambda (p) (cons (terminal-rel-row t (car p)) (cdr p)))])
+           (list (target-uri x) (rel (target-start x)) (rel (target-end x)) (rel (target-label x))
+                 (> (target-link x) 0))))
+       (hint-targets t)))
+
+(let ([t (make-term 3 20)])
+  (feed t (osc8 "id=a" "http://a/") "ab" (osc8 "" "") " " (osc8 "id=a" "http://a/") "cd" (osc8 "" "")
+        " " (osc8 "" "http://b/") "ef" (osc8 "" "") " " (osc8 "" "javascript:x()") "js" (osc8 "" ""))
+  (check "targets: one per link id, at its first run"
+         '(("http://a/" (0 . 0) (0 . 2) (0 . 0) #t) ("http://b/" (0 . 6) (0 . 8) (0 . 6) #t)
+           ("javascript:x()" (0 . 9) (0 . 11) (0 . 9) #t))
+         (targets t)))
+
+(let ([t (make-term 3 10)])
+  (feed t "12345" (osc8 "" "http://wrap/") "abcdefgh" (osc8 "" "") " x")
+  (check "targets: link wrapping onto the next row"
+         '(("http://wrap/" (0 . 5) (1 . 3) (0 . 5) #t)) (targets t)))
+
+(let ([t (make-term 6 20)])
+  (feed t "see https://example.com/some/long/path ok\r\nhttp://two/ and (https://en.wikipedia.org/wiki/Foo_(bar)).")
+  (check "targets: wrapped URL, brackets balanced, punctuation dropped"
+         '(("https://example.com/some/long/path" (0 . 4) (1 . 18) (0 . 4) #f)
+           ("http://two/" (3 . 0) (3 . 11) (3 . 0) #f))
+         (list-head (targets t) 2))
+  (check "text-url-at: wrapped part" "https://example.com/some/long/path"
+         (text-url-at t (cons (terminal-abs-row t 1) 5)))
+  (check "text-url-at: first part" "https://example.com/some/long/path"
+         (url-at t (cons (terminal-abs-row t 0) 19)))
+  (check "text-url-at: after the URL" #f (text-url-at t (cons (terminal-abs-row t 1) 19)))
+  (check "targets: URL cut off at the bottom" "https://en.wikipedia.org/wiki/Foo_(bar)"
+         (let ([t2 (make-term 6 50)])
+           (feed t2 "(https://en.wikipedia.org/wiki/Foo_(bar)).")
+           (target-uri (car (hint-targets t2)))))
+  (check "target-ranges: wrapped URL" '(((4 20)) ((0 18)) ())
+         (map (lambda (r) (target-ranges (car (hint-targets t)) (terminal-abs-row t r) 20)) '(0 1 2))))
+
+;; scrolled back: only what is visible, and a URL that starts above the
+;; view gets its label at the first visible cell
+(let ([t (make-term 3 20 100)])
+  (feed t "https://top.example/\r\n" "a https://a.example/xyz\r\nline\r\n" "b http://b/\r\n4\r\n5\r\n6")
+  (check "targets: bottom of the screen" '() (targets t))
+  (terminal-scroll-display! t 3)
+  (check "targets: scrolled back"
+         '(("https://a.example/xyz" (-4 . 2) (-3 . 3) (-3 . 0) #f) ("http://b/" (-1 . 2) (-1 . 11) (-1 . 2) #f))
+         (targets t))
+  (terminal-scroll-display! t 2)
+  (check "targets: scrolled to the top"
+         '(("https://top.example/" (-5 . 0) (-5 . 20) (-5 . 0) #f) ("https://a.example/xyz" (-4 . 2) (-3 . 3) (-4 . 2) #f))
+         (targets t)))
+
+;; URLs next to OSC 8 links
+(let ([t (make-term 3 60)])
+  (feed t (osc8 "" "https://explicit/") "see https://inside.example/" (osc8 "" "") "https://after.example/ "
+        (osc8 "" "http://l/") "link" (osc8 "" "") " https://plain.example/")
+  (check "targets: URLs next to links"
+         '(("https://explicit/" (0 . 0) (0 . 27) (0 . 0) #t) ("https://after.example/" (0 . 27) (0 . 49) (0 . 27) #f)
+           ("http://l/" (0 . 50) (0 . 54) (0 . 50) #t) ("https://plain.example/" (0 . 55) (1 . 17) (0 . 55) #f))
+         (targets t)))
+
+;; wide characters: in a URL, in a link, and a wide character that did not
+;; fit at the end of a wrapped row
+(let ([t (make-term 4 30)])
+  (feed t "日本 https://例え.jp/パス x " (osc8 "" "http://w/") "日" (osc8 "" "") "\r\n"
+        "https://abcdefghijklmnopqrstu日本 x")
+  (check "targets: wide characters"
+         '(("https://例え.jp/パス" (0 . 5) (0 . 25) (0 . 5) #f) ("http://w/" (0 . 28) (0 . 30) (0 . 28) #t)
+           ("https://abcdefghijklmnopqrstu日本" (1 . 0) (2 . 4) (1 . 0) #f))
+         (targets t))
+  (check "text-url-at: second half of a wide character" "https://例え.jp/パス"
+         (text-url-at t (cons (terminal-abs-row t 0) 24))))
+
+;;; default key bindings: no two on the same keys
+(let ([keys (map (lambda (b) (parse-key-binding (car b))) (config-ref 'bindings))])
+  (check "default bindings parse" #t (and (for-all values keys) #t))
+  (check "default bindings: no two on the same keys" (length keys)
+         (let ([h (make-hashtable equal-hash equal?)]) (for-each (lambda (k) (hashtable-set! h k #t)) keys)
+           (hashtable-size h)))
+  (check "default bindings: hints" '(hint-open hint-copy)
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y"))))
+
+;;; hint labels
+(check "hint labels: Alacritty's sequence"
+       '("0" "1" "20" "21" "30" "31" "220" "221" "230" "231" "320" "321" "330" "331"
+         "2220" "2221" "2230" "2231" "2320" "2321" "2330" "2331" "3220" "3221" "3230" "3231"
+         "3320" "3321" "3330" "3331")
+       (hint-labels "0123" 30))
+(check "hint labels: default alphabet"
+       '("j" "f" "k" "d" "l" "s" ";" "a" "h" "gj" "gf" "gk")
+       (hint-labels default-hint-alphabet 12))
+(let ([ls (hint-labels default-hint-alphabet 800)])
+  (check "hint labels: prefix-free" #t
+         (for-all (lambda (a)
+                    (for-all (lambda (b)
+                               (or (eq? a b) (not (and (<= (string-length a) (string-length b))
+                                                       (string=? a (substring b 0 (string-length a)))))))
+                             ls))
+                  ls))
+  (check "hint labels: all different" 800
+         (let ([h (make-hashtable string-hash string=?)]) (for-each (lambda (l) (hashtable-set! h l #t)) ls) (hashtable-size h)))
+  (check "hint labels: shortest first" #t
+         (let loop ([ls ls]) (or (null? (cdr ls)) (and (<= (string-length (car ls)) (string-length (cadr ls))) (loop (cdr ls))))))
+  (check "hint labels: 9 of one key, 81 of two" '(9 81 710)
+         (map (lambda (n) (length (filter (lambda (l) (= n (string-length l))) ls))) '(1 2 3))))
+(check "hint alphabet: valid" '(#t #f #f #f #t)
+       (map valid-hint-alphabet? (list default-hint-alphabet "a" "aba" 'x "ab")))
+
+;;; hint mode: labels, typing, Backspace and Escape
+(let* ([t (make-term 12 20)]
+       [_ (for-each (lambda (i) (feed t (format "http://~a/~a" i (if (< i 11) "\r\n" "")))) (iota 12))]
+       [targets (hint-targets t)]
+       [s (hint-start 'hint-copy default-hint-alphabet targets)]
+       [uri (lambda (x) (and x (target-uri x)))]
+       [labels (lambda (s) (map (lambda (v) (cons (target-uri (car v)) (cdr v))) (hint-visible s)))]
+       [key (lambda (s . keys)
+              (let loop ([s s] [keys keys])
+                (let-values ([(s2 picked) (hint-key s (car keys))])
+                  (if (null? (cdr keys)) (list (and s2 (hint-state-typed s2)) (uri picked)) (loop s2 (cdr keys))))))]
+       [after (lambda (s . keys)
+                (let loop ([s s] [keys keys])
+                  (if (null? keys) s (let-values ([(s2 p) (hint-key s (car keys))]) (loop s2 (cdr keys))))))])
+  (check "hint mode: no targets" #f (hint-start 'hint-open default-hint-alphabet '()))
+  (check "hint mode: shortest labels at the bottom"
+         '(("http://0/" . "gk") ("http://1/" . "gf") ("http://2/" . "gj") ("http://3/" . "h") ("http://4/" . "a")
+           ("http://5/" . ";") ("http://6/" . "s") ("http://7/" . "l") ("http://8/" . "d") ("http://9/" . "k")
+           ("http://10/" . "f") ("http://11/" . "j"))
+         (labels s))
+  (check "hint mode: one key picks" '(#f "http://11/") (key s #\j))
+  (check "hint mode: first key of two" '("g" #f) (key s #\g))
+  (check "hint mode: typed keys filter"
+         '(("http://0/" . "gk") ("http://1/" . "gf") ("http://2/" . "gj")) (labels (after s #\g)))
+  (check "hint mode: second key picks" '(#f "http://1/") (key s #\g #\f))
+  (check "hint mode: a key no label continues with is ignored" '("g" #f) (key s #\g #\x))
+  (check "hint mode: unknown first key" '("" #f) (key s #\z))
+  (check "hint mode: Backspace" '("" #f) (key s #\g 'backspace))
+  (check "hint mode: Backspace with nothing typed" '("" #f) (key s 'backspace))
+  (check "hint mode: Backspace, then another label" '(#f "http://11/") (key s #\g 'backspace #\j))
+  (check "hint mode: Escape" '(#f #f) (key s #\g 'escape))
+  (check "hint mode: other keys ignored" '("g" #f) (key s #\g 'left))
+  (check "hint mode: case matters" '("" #f) (key s #\J))
+  (check "hint mode: update keeps the typed keys" "g"
+         (hint-state-typed (hint-update (after s #\g) targets)))
+  (check "hint mode: update without targets ends it" #f (hint-update s '()))
+  (check "hint label cells: typed part"
+         '((0 2 "gk" 1))
+         (hashtable-ref (hint-label-cells (after s #\g) 20) (terminal-abs-row t 0) #f))
+  (check "hint label cells: filtered out" #f
+         (hashtable-ref (hint-label-cells (after s #\g) 20) (terminal-abs-row t 3) #f)))
+;; a label at the right edge continues on the next row
+(let* ([t (make-term 3 10)])
+  (feed t "123456789" (osc8 "" "http://x/") "abcd" (osc8 "" "") " http://y/")
+  (let ([cells (hint-label-cells (hint-start 'hint-copy "ab" (hint-targets t)) 10)])
+    (check "hint label cells: at the right edge"
+           '(((9 10 "b" 0)) ((0 1 "a" 0) (4 5 "a" 0)))
+           (map (lambda (r) (hashtable-ref cells (terminal-abs-row t r) #f)) '(0 1)))))
 
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
@@ -1686,6 +1860,51 @@
       (check "hovered link drawn" #f (equal? (snapshot r) before))
       (renderer-render! r t #t #t (lambda (a) '()) #f)
       (check "hover ends = fresh" #t (equal? (snapshot r) before)))
+    (renderer-free! r))
+  ;; hint labels are drawn over the cells, in the hint colors: labels
+  ;; appearing, filtered as keys are typed, over wide characters, at the
+  ;; right edge, and gone again
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [pixel (lambda (row col) (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                               (* 4 (+ 3 (* col cw) (* (+ 3 (* row chh)) (renderer-width r))))))]
+         [rows (lambda (alist) (lambda (a) (let ([e (assv (terminal-rel-row t a) alist)]) (if e (cdr e) '()))))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))]
+         [labels (rows '((0 . ((0 2 "gk" 0) (6 7 "h" 0))) (1 . ((19 20 "g" 0))) (2 . ((0 1 "f" 0)))
+                         (3 . ((2 4 "j;" 0)))))]
+         [typed (rows '((0 . ((0 2 "gk" 1))) (1 . ((19 20 "g" 1))) (2 . ((0 1 "f" 0)))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t "row 0 日本語 text\r\n" (esc "[44m") "0123456789012345678" (esc "[0m") "日本\r\n"
+          (esc "[4m") "underlined" (esc "[0m") "\r\n日本語")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let ([before (snapshot r)])
+      (renderer-render! r t #t #t labels #f)
+      (check "hint labels = fresh" #t (equal? (snapshot r) (fresh labels)))
+      (check "hint labels drawn" #f (equal? (snapshot r) before))
+      (check "hint label colors" '(#xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75)
+             (map (lambda (p) (pixel (car p) (cdr p))) '((0 . 0) (0 . 1) (0 . 6) (1 . 19) (2 . 0))))
+      (check "hint label covers the second half of a wide character" #xFFF4BF75 (pixel 0 7))
+      (check "hint label next to it untouched" (pixel 0 8)
+             (let ([s (fresh (lambda (a) '()))]) (bytevector-u32-native-ref s (* 4 (+ 3 (* 8 cw) (* 3 (renderer-width r)))))))
+      (renderer-render! r t #t #t typed #f)
+      (check "hint labels typed = fresh" #t (equal? (snapshot r) (fresh typed)))
+      (check "hint label typed colors" '(#xFFAC4242 #xFFF4BF75 #xFFAC4242)
+             (map (lambda (p) (pixel (car p) (cdr p))) '((0 . 0) (0 . 1) (1 . 19))))
+      (check "hint label filtered out" (bytevector-u32-native-ref before (* 4 (+ 3 (* 6 cw) (* 3 (renderer-width r)))))
+             (pixel 0 6))
+      (feed t "\r\nmore\r\nmore\r\nmore")
+      (renderer-render! r t #t #t typed #f)
+      (check "hint labels scrolled = fresh" #t (equal? (snapshot r) (fresh typed)))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "hint labels gone = fresh" #t (equal? (snapshot r) (fresh (lambda (a) '()))))
+      (renderer-set-hint-colors! r #xFFFFFF #x0000FF #x000000 #x00FF00)
+      (renderer-render! r t #t #t labels #f)
+      (check "hint colors option" #xFF0000FF (pixel 0 0)))
     (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal

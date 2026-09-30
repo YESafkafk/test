@@ -12,8 +12,8 @@
    memset strlen c-getenv setenv unsetenv setlocale wcwidth
    __errno_location strerror c-read c-write close pipe2 fcntl
    poll ioctl dup2 mmap munmap ftruncate memfd_create fork
-   setsid forkpty execvp _exit waitpid kill getpid chdir
-   readlink timerfd_create timerfd_settime inotify_init1
+   setsid forkpty execvp _exit waitpid kill getpid gethostname
+   chdir readlink timerfd_create timerfd_settime inotify_init1
    inotify_add_watch sigemptyset sigprocmask signal
    wl_display_connect wl_display_disconnect wl_display_get_fd
    wl_display_dispatch wl_display_dispatch_pending
@@ -368,6 +368,8 @@
     (foreign-procedure "waitpid" (int uptr int) int))
   (define kill (foreign-procedure "kill" (int int) int))
   (define getpid (foreign-procedure "getpid" () int))
+  (define gethostname
+    (foreign-procedure "gethostname" (uptr unsigned-long) int))
   (define chdir (foreign-procedure "chdir" (uptr) int))
   (define readlink
     (foreign-procedure "readlink"

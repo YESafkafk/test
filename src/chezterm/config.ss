@@ -51,12 +51,17 @@
       (copy-on-select . #t)             ; selections go to the primary selection
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
+      (hint-alphabet . "jfkdls;ahgurieowpq") ; characters of the keyboard hint labels
       (colors
        . ((foreground . "#d8d8d8")
           (background . "#181818")
           (cursor . "#d8d8d8")
           (selection-foreground . #f)
           (selection-background . "#4f4f4f")
+          (hint-foreground . "#181818")
+          (hint-background . "#f4bf75")
+          (hint-typed-foreground . "#181818")
+          (hint-typed-background . "#ac4242")
           (normal . ("#181818" "#ac4242" "#90a959" "#f4bf75"
                      "#6a9fb5" "#aa759f" "#75b5aa" "#d8d8d8"))
           (bright . ("#6b6b6b" "#c55555" "#aac474" "#feca88"
@@ -83,6 +88,8 @@
           ("ctrl+shift+n" . spawn-new-instance)
           ("ctrl+shift+f" . search-forward)
           ("ctrl+shift+b" . search-backward)
+          ("ctrl+shift+o" . hint-open)
+          ("ctrl+shift+y" . hint-copy)
           ("f11" . toggle-fullscreen)))))
 
   (define (config-path)
