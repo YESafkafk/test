@@ -69,8 +69,8 @@ for keys without a legacy encoding (`kitty-keyboard-legacy-csi-u`). What is
 left:
 - **Hyper and Meta on a shared modifier.** Most keymaps put Hyper on Mod4
   with Super and Meta on Mod1 with Alt. Such a Hyper key then reports
-  Super, as in kitty: the compositor only sends real modifiers, so the two
-  cannot be told apart.
+  Super: the compositor only sends real modifiers, so the two cannot be
+  told apart.
 - **Keys pressed while the window was unfocused.** Their release, after the
   focus came back, is reported although the application never saw the
   press. foot does the same, kitty drops such releases. Keys held when the

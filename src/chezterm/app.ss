@@ -662,7 +662,8 @@
       (unless (= id hover-link)
         (set! hover-link id)
         (set! need-redraw #t))
-      (window-set-cursor! win (cond [(mouse-reporting?) 'default] [(> id 0) 'pointer] [else 'text]))))
+      (when pointer-inside
+        (window-set-cursor! win (cond [(mouse-reporting?) 'default] [(> id 0) 'pointer] [else 'text])))))
 
   (define (pointer-motion! x y)
     (set! mouse-x x)

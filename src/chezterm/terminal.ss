@@ -97,9 +97,10 @@
      ;; kitty keyboard protocol: whether it is enabled, and the flags
      ;; stacks of the primary and alternate screens (see keyboard-flags!)
      (mutable kitty-keyboard) (mutable kbd-primary) (mutable kbd-alt)
-     ;; OSC 8 hyperlinks (see open-link!): id -> URI, (id-param . URI) -> id,
-     ;; the next id, the id of the link being printed (0: none), and how many
-     ;; more new links to drop before collecting again
+     ;; OSC 8 hyperlinks (see osc-hyperlink!): id -> (URI . key), where key
+     ;; is (id-param . URI) for a link with an id parameter and #f otherwise;
+     ;; key -> id; the next id; the id of the link being printed (0: none);
+     ;; and how many more new links to drop before collecting again
      (mutable links) (mutable link-ids) (mutable link-next) (mutable link)
      (mutable link-gc-pause)
      ;; the cell extra printed characters get (see grid.ss), #f for none
@@ -1265,7 +1266,7 @@
                (when data ((terminal-on-clipboard t) (utf8->string data))))))]
         [else (void)])))
 
-;;; OSC 8 hyperlinks --------------------------------------------------------
+  ;;; OSC 8 hyperlinks --------------------------------------------------------
   ;;; OSC 8 ; params ; URI ST starts a link that the following characters get,
   ;;; an empty URI ends it (gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda).
   ;;; Cells hold a link id in their cell extra, and the terminal maps ids to

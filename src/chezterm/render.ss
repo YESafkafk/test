@@ -369,9 +369,9 @@
   ;; Render TERM.  HIGHLIGHTS is a procedure mapping an absolute row to a
   ;; list of column ranges: (c0 c1 current?) for search matches, drawn with
   ;; a highlighted background, and (c0 c1 link) for a hovered link, drawn
-  ;; underlined.  OVERLAY, when not #f, is
-  ;; a line drawn instead of the bottom row (the search prompt).  Returns a list of damaged
-  ;; (y0 . y1) pixel row ranges, empty when nothing changed.
+  ;; underlined.  OVERLAY, when not #f, is a line drawn instead of the
+  ;; bottom row (the search prompt).  Returns a list of damaged (y0 . y1)
+  ;; pixel row ranges, empty when nothing changed.
   (define (renderer-render! r term focused? blink-on? highlights overlay)
     (let* ([font (renderer-font r)]
            [cw (font-cell-width font)] [ch (font-cell-height font)]
