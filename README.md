@@ -94,6 +94,7 @@ make test       # headless test suite (terminal, selection, keys, renderer),
                 # run against the sources and against the optimized build,
                 # then the terminfo entry checked against the emulator
 make check-generated  # regenerate bindings and protocols, diff with the committed files
+make bench      # benchmarks: parsing, rendering, pty pipeline (docs/BENCHMARKS.md)
 ```
 
 Make variables: `SCHEME` (the Chez Scheme executable), `C2FFI` and
@@ -125,6 +126,8 @@ nix fmt                   # format the Nix files (treefmt + nixfmt)
 nix run .#test            # test suite on the working tree
 nix run .#bindings        # regenerate ffi.ss and protocols.ss in the working tree
 nix build .#bindings      # the generated files, built with c2ffi from nixpkgs
+nix run .#bench           # benchmarks with pinned toolchain and font (docs/BENCHMARKS.md)
+nix run .#bench-ab -- -- OLD/bin/chezterm-bench NEW/bin/chezterm-bench   # interleaved A/B
 ```
 
 Checks (`nix build .#checks.x86_64-linux.NAME`):
@@ -135,6 +138,7 @@ Checks (`nix build .#checks.x86_64-linux.NAME`):
 | `tests` | `make test` (both passes), with DejaVu fonts through `makeFontsConf` |
 | `generated` | regenerating the bindings and protocols gives the committed files, and `make relink` gives the same file as generating with store paths |
 | `formatting` | `treefmt --ci` |
+| `bench` | runs the benchmarks with `--quick` (a smoke test, not timing) and the compare tool on the result |
 | `vm` | NixOS VM with headless sway: starts chezterm, types a command with `wtype`, checks that the shell ran it, takes a `grim` screenshot and a `--dump-frame` image (kept in the output) |
 
 The `vm` check needs KVM (the `kvm` system feature). Without it, skip the

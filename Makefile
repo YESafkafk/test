@@ -27,7 +27,8 @@ PROTOCOLS := protocols/wayland.xml protocols/xdg-shell.xml \
              protocols/primary-selection-unstable-v1.xml \
              protocols/cursor-shape-v1.xml
 
-.PHONY: all bindings protocols relink check-generated run test check clean install terminfo
+.PHONY: all bindings protocols relink check-generated run test check clean install terminfo \
+        bench bench-quick bench-compare bench-ab
 
 all: $(BUILD)/chezterm terminfo
 
@@ -100,6 +101,34 @@ test: all
 	TERMINFO=$(CURDIR)/$(BUILD)/terminfo $(SCHEME) -q --libdirs $(BUILD)/lib --script tests/terminfo.ss
 
 check: test
+
+# Benchmarks (see docs/BENCHMARKS.md).  Results go to $(BENCH_OUT) as JSON;
+# pass options with BENCH_ARGS, e.g. BENCH_ARGS="--only parse --iterations 11".
+BENCH_OUT  ?= $(BUILD)/bench.json
+BENCH_ARGS ?=
+bench: all
+	$(SCHEME) -q --libdirs $(BUILD)/lib:. --script bench/run.ss --out $(BENCH_OUT) $(BENCH_ARGS)
+
+bench-quick: all
+	$(SCHEME) -q --libdirs $(BUILD)/lib:. --script bench/run.ss --quick $(BENCH_ARGS)
+
+# make bench-compare OLD=before.json NEW=after.json
+bench-compare:
+	$(SCHEME) -q --libdirs tools --script bench/compare.ss $(OLD) $(NEW)
+
+# make bench-ab BASE=<git revision> [BENCH_ARGS="--only render"] [ROUNDS=5]
+# Builds BASE in $(BUILD)/base and compares it with the working tree,
+# interleaving the runs (bench/ab.sh).  Both sides use this checkout's
+# bench/run.ss, so BASE must have the library interfaces it uses.
+ROUNDS ?= 5
+bench-ab: all
+	@test -n "$(BASE)" || { echo "usage: make bench-ab BASE=<git revision>"; exit 2; }
+	rm -rf $(BUILD)/base && mkdir -p $(BUILD)/base
+	git archive "$(BASE)" | tar -x -C $(BUILD)/base
+	$(MAKE) -C $(BUILD)/base SCHEME="$(SCHEME)" TIC=
+	sh bench/ab.sh -r $(ROUNDS) -o $(BUILD)/ab -- \
+	    "$(SCHEME) -q --libdirs $(BUILD)/base/build/lib:. --script bench/run.ss" \
+	    "$(SCHEME) -q --libdirs $(BUILD)/lib:. --script bench/run.ss" $(BENCH_ARGS)
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/lib/chezterm $(DESTDIR)$(PREFIX)/bin

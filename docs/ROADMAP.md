@@ -19,6 +19,16 @@ because it is rare. `draw-underline!` already takes the color as a parameter.
 Once it is drawn, add `Setulc=\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm`
 to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
 
+### Performance findings from the benchmarks
+
+[BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with
+measurements:
+- the ASCII tile cache thrashes on multicolored text
+- Unicode text parses 3–4× slower than ASCII
+- rendering during streaming output halves pipeline throughput at large sizes.
+
+Check each change with `make bench-ab BASE=main`.
+
 ## Medium
 
 ### Fractional scaling
