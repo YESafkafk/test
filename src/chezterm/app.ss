@@ -68,6 +68,8 @@
   (define last-click-time 0)
   (define last-click-cell #f)
   (define smooth-scroll-acc 0.0)
+  (define pointer-inside #f)
+  (define hover-link 0)           ; the OSC 8 link under the pointer while Ctrl is held
 
   ;; search
   (define search-active #f)
@@ -284,8 +286,10 @@
       (set! need-redraw #f)
       (terminal-dirty-set! term #f)
       (let* ([t0 (now-ms)]
-             [damage (renderer-render! renderer term focused blink-on search-highlights
-                                       (and search-active (search-overlay)))]
+             [damage (begin
+                       (update-hover!)       ; the text under the pointer may have changed
+                       (renderer-render! renderer term focused blink-on highlights
+                                         (and search-active (search-overlay))))]
              [t1 (now-ms)])
         (set! backlog-next-frame (+ t1 (min max-backlog-frame-gap (* 4 (- t1 t0)))))
         (unless (null? damage)
@@ -380,6 +384,15 @@
           (send! normalized))))
 
   ;;; Search -------------------------------------------------------------------------------
+
+  ;; What the renderer highlights in absolute row ABS: search matches and
+  ;; the hovered link.
+  (define (highlights abs)
+    (let ([s (search-highlights abs)])
+      (if (= hover-link 0)
+          s
+          (append s (map (lambda (r) (list (car r) (cadr r) 'link))
+                         (link-ranges term hover-link abs))))))
 
   (define (search-highlights abs)
     (if (and search-active (> (string-length search-query) 0))
@@ -612,7 +625,8 @@
                (set! last-click-time t)
                (set! last-click-cell pt)
                (cond
-                 [(and ctrl (= click-count 1) (url-at term pt))
+                 [(and ctrl (= click-count 1)
+                       (let ([url (url-at term pt)]) (and url (openable-url? url) url)))
                   => (lambda (url) (spawn-detached (list "xdg-open" url) #f))]
                  [else
                   (set! select-anchor pt)
@@ -636,10 +650,25 @@
            (when (config-ref 'copy-on-select) (copy-selection! 'primary)))]
         [else (void)])))
 
+  ;; Hovering an OSC 8 link with Ctrl held underlines all of it (on screen)
+  ;; and shows a hand when a click would open it.
+  (define (update-hover!)
+    (let ([id (if (and pointer-inside (not (mouse-reporting?))
+                       (logtest (keyboard-mods (window-keyboard win)) MOD-CTRL))
+                  (let* ([id (link-id-at term (point->cell mouse-x mouse-y))]
+                         [uri (terminal-link-uri term id)])
+                    (if (and uri (openable-url? uri)) id 0))
+                  0)])
+      (unless (= id hover-link)
+        (set! hover-link id)
+        (set! need-redraw #t))
+      (window-set-cursor! win (cond [(mouse-reporting?) 'default] [(> id 0) 'pointer] [else 'text]))))
+
   (define (pointer-motion! x y)
     (set! mouse-x x)
     (set! mouse-y y)
-    (window-set-cursor! win (if (mouse-reporting?) 'default 'text))
+    (set! pointer-inside #t)
+    (update-hover!)
     (let ([cell (pointer-view-cell)])
       (cond
         [(mouse-reporting?)
@@ -712,6 +741,7 @@
        (if focused
            (set! consumed-keys (filter (lambda (k) (memv k (cadr args))) consumed-keys))
            (set! repeat-key #f))
+       (update-hover!)
        (when (terminal-focus-events? term) (send! (if focused "\x1b;[I" "\x1b;[O")))
        (set! need-redraw #t)]
       [(key-press)
@@ -733,7 +763,8 @@
          (when (eqv? key repeat-key) (set! repeat-key #f))
          (key-release! key (cadr args)))]
       [(pointer-enter) (pointer-motion! (car args) (cadr args))]
-      [(pointer-leave) (void)]
+      [(pointer-leave) (set! pointer-inside #f) (update-hover!)]
+      [(modifiers) (update-hover!)]
       [(pointer-motion) (pointer-motion! (car args) (cadr args))]
       [(pointer-button) (pointer-button! (car args) (cadr args))]
       [(scroll) (when (= (car args) 0) (scroll! (cadr args) (caddr args)))]

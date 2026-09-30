@@ -367,7 +367,9 @@
   ;;; Main entry ----------------------------------------------------------------
 
   ;; Render TERM.  HIGHLIGHTS is a procedure mapping an absolute row to a
-  ;; list of (c0 c1 current?) search match ranges.  OVERLAY, when not #f, is
+  ;; list of column ranges: (c0 c1 current?) for search matches, drawn with
+  ;; a highlighted background, and (c0 c1 link) for a hovered link, drawn
+  ;; underlined.  OVERLAY, when not #f, is
   ;; a line drawn instead of the bottom row (the search prompt).  Returns a list of damaged
   ;; (y0 . y1) pixel row ranges, empty when nothing changed.
   (define (renderer-render! r term focused? blink-on? highlights overlay)
@@ -497,7 +499,9 @@
                [fg (if (fxlogtest attrs ATTR-DIM) (dim fg) fg)]
                [bg (color->rgb palette bgc)]
                [rev (not (eq? (fxlogtest attrs ATTR-REVERSE) reverse-video))]
-               [h (and (pair? hl) (find (lambda (h) (and (fx<= (car h) i) (fx< i (cadr h)))) hl))])
+               [h (and (pair? hl) (find (lambda (h) (and (fx<= (car h) i) (fx< i (cadr h))
+                                                          (boolean? (caddr h))))
+                                        hl))])
           (let-values ([(fg bg default-bg)
                         (cond
                           [h (values 0 (if (caddr h) #xF0A030 #x8A6A20) #f)]
@@ -556,9 +560,13 @@
                                         overhang))])))))
         (for-each (lambda (o) (draw-glyph! r (car o) (cadr o) by (caddr o) y0 y1))
                   (reverse overhang)))
-      ;; pass 4: underlines and strikethrough
+      ;; pass 4: underlines, strikethrough and hovered links
       (do ([i 0 (fx+ i 1)]) ((fx= i ncols))
         (let ([attrs (cell-attrs v i)])
+          (when (and (pair? hl)
+                     (exists (lambda (h) (and (eq? (caddr h) 'link) (fx<= (car h) i) (fx< i (cadr h)))) hl))
+            (let ([x (fx+ px (fx* i cw))])
+              (draw-underline! r UL-SINGLE x (fx+ x cw) y0 y1 (fxvector-ref row-fg i))))
           (when (and (fxlogtest attrs (fxior ATTR-UNDERLINE-MASK ATTR-STRIKE))
                      (not (fxlogtest attrs ATTR-SPACER)))
             (let ([x (fx+ px (fx* i cw))]

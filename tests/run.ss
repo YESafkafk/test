@@ -609,6 +609,37 @@
   (check "url at" "https://example.com/a?b=1" (url-at t (cons (terminal-abs-row t 0) 10)))
   (check "no url" #f (url-at t (cons (terminal-abs-row t 0) 1))))
 
+;; OSC 8 links: url-at finds an explicit link first, then URLs in the text
+(let ([t (make-term 3 80)] [pt (lambda (t row col) (cons (terminal-abs-row t row) col))])
+  (feed t (osc8 "" "https://explicit.example/") "see https://text.example/" (osc8 "" "")
+        " https://plain.example/ " (osc8 "" "file://host/tmp/x") "日本" (osc8 "" "") "\r\n"
+        (osc8 "id=j" "javascript:alert(1)") "js" (osc8 "" "") " " (osc8 "id=j" "javascript:alert(1)")
+        "js" (osc8 "" ""))
+  (check "url-at: explicit link" "https://explicit.example/" (url-at t (pt t 0 0)))
+  (check "url-at: explicit link over a URL in its text" "https://explicit.example/" (url-at t (pt t 0 8)))
+  (check "url-at: URL in the text" "https://plain.example/" (url-at t (pt t 0 26)))
+  (check "url-at: wide character, second half" "file://host/tmp/x" (url-at t (pt t 0 50)))
+  (check "url-at: nothing" #f (url-at t (pt t 2 0)))
+  (check "url-at: scheme not allowed, still found" "javascript:alert(1)" (url-at t (pt t 1 0)))
+  (check "link-id-at: none" 0 (link-id-at t (pt t 0 25)))
+  (check "link-ranges: one run" '((0 25)) (link-ranges t (link-id-at t (pt t 0 3)) (terminal-abs-row t 0)))
+  (check "link-ranges: wide characters" '((49 53))
+         (link-ranges t (link-id-at t (pt t 0 50)) (terminal-abs-row t 0)))
+  (check "link-ranges: same id, two runs" '((0 2) (3 5))
+         (link-ranges t (link-id-at t (pt t 1 0)) (terminal-abs-row t 1)))
+  (check "link-ranges: other row" '() (link-ranges t (link-id-at t (pt t 1 0)) (terminal-abs-row t 0)))
+  (terminal-resize! t 3 30)
+  (check "url-at: after reflow" "https://explicit.example/" (url-at t (pt t 0 4)))
+  (check "url-at: after reflow, wrapped part" "file://host/tmp/x" (url-at t (pt t 1 20))))
+
+;; Ctrl+click only opens these schemes
+(for-each
+ (lambda (u ok)
+   (check (format "openable-url? ~a" u) ok (openable-url? u)))
+ '("http://a/" "https://a/" "HTTPS://a/" "ftp://a/" "file:///tmp/x" "mailto:a@b" "javascript:alert(1)"
+   "ssh://host" "data:text/html,x" "x-man-page://ls" "no-scheme" "" "https")
+ '(#t #t #t #t #t #t #f #f #f #f #f #f #f))
+
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
   (define (query) (set! responses '()) (feed t (esc "[?u")) responses)
@@ -1488,6 +1519,25 @@
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; a hovered link is underlined through the highlights
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [hl (lambda (a) (if (= a (terminal-abs-row t 1)) '((2 6 link) (8 10 link)) '()))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "row 0\r\n" (osc8 "id=a" "http://a/") "ab" (osc8 "" "") "linked 日本 text")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let ([before (snapshot r)])
+      (renderer-render! r t #t #t hl #f)
+      (check "hovered link = fresh" #t (equal? (snapshot r) (fresh hl)))
+      (check "hovered link drawn" #f (equal? (snapshot r) before))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "hover ends = fresh" #t (equal? (snapshot r) before)))
+    (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal
   (let ([t (make-term 4 15)])

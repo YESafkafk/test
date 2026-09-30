@@ -24,7 +24,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 52 clipboard (write only)
+    OSC 8 hyperlinks, OSC 52 clipboard (write only)
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
 - **Scrollback** (configurable size), which stays in place while new output
@@ -35,7 +35,11 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
-- **Ctrl+click on URLs** opens them with `xdg-open`.
+- **Ctrl+click on links and URLs** opens them with `xdg-open`: OSC 8
+  hyperlinks first, then URLs found in the text. Only `http`, `https`,
+  `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
+  from the program. Holding Ctrl over a link underlines all of it, also
+  where it continues on another row.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
   (CBDT bitmaps scaled to the cell), runtime font size changes.
@@ -261,7 +265,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 
 Mouse: drag to select, double/triple click for words/lines, Ctrl+drag for a block,
 right click to extend. Hold Shift to select while an application uses the mouse.
-Ctrl+click opens URLs.
+Ctrl+click opens links and URLs.
 
 ## How it is built
 

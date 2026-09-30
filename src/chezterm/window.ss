@@ -10,6 +10,7 @@
 ;;;                               held when it arrives ('() when it leaves)
 ;;;   key-press key-event keycode  (key-event #f while composing)
 ;;;   key-release keycode key-event
+;;;   modifiers                   the keyboard's modifiers changed
 ;;;   pointer-enter x y / pointer-leave / pointer-motion x y
 ;;;   pointer-button button pressed?
 ;;;   scroll axis amount discrete?   (axis 0 vertical, 1 horizontal)
@@ -354,7 +355,9 @@
          (if (= state WL_KEYBOARD_KEY_STATE_PRESSED)
              (emit w 'key-press (keyboard-translate (window-keyboard w) key KEY-PRESS) key)
              (emit w 'key-release key (keyboard-translate (window-keyboard w) key KEY-RELEASE))))]
-      [(modifiers) (apply keyboard-update-modifiers! (window-keyboard w) (cdr args))]
+      [(modifiers)
+       (apply keyboard-update-modifiers! (window-keyboard w) (cdr args))
+       (emit w 'modifiers)]
       [(repeat_info) (window-repeat-rate-set! w (car args)) (window-repeat-delay-set! w (cadr args))]
       [else (void)]))
 
@@ -386,7 +389,7 @@
          (window-axis-source-set! w #f))]
       [else (void)]))
 
-  ;; name: 'text or 'default
+  ;; name: 'text, 'default or 'pointer (a hand, over a link)
   (define (window-set-cursor! w name)
     (unless (eq? name (window-cursor-name w))
       (window-cursor-name-set! w name)
@@ -400,9 +403,10 @@
           [(window-cursor-shape-device w)
            => (lambda (dev)
                 (wp_cursor_shape_device_v1_set_shape
-                 dev serial (if (eq? name 'text)
-                                WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT
-                                WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT)))]
+                 dev serial (case name
+                              [(text) WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT]
+                              [(pointer) WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER]
+                              [else WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT])))]
           [else (set-theme-cursor! w p serial name)]))))
 
   ;; fallback: cursor images from the XCursor theme via libwayland-cursor
@@ -415,9 +419,10 @@
           (window-cursor-surface-set! w (wl_compositor_create_surface (global w "wl_compositor")))))
       (let ([theme (window-cursor-theme w)])
         (unless (eq? theme 'none)
-          (let ([cursor (let loop ([names (if (eq? name 'text)
-                                               '("text" "xterm" "ibeam")
-                                               '("default" "left_ptr"))])
+          (let ([cursor (let loop ([names (case name
+                                            [(text) '("text" "xterm" "ibeam")]
+                                            [(pointer) '("pointer" "hand2" "hand1")]
+                                            [else '("default" "left_ptr")])])
                           (cond [(null? names) 0]
                                 [else (let ([c (wl_cursor_theme_get_cursor theme (car names))])
                                         (if (ptr-null? c) (loop (cdr names)) c))]))])

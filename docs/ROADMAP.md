@@ -5,12 +5,12 @@ would go in the code.
 
 ## Small
 
-### OSC 8 hyperlinks
+### OSC 8 hyperlinks (done)
 
-The parser currently drops OSC 8. Cells would need a hyperlink id, which could
-be stored in the line's `extra` table like combining marks. `url-at` in
-`selection.ss` would look there first, so Ctrl+click opens explicit links too.
-Hovering could underline the whole link.
+Cells keep a link id in the line's `extra` table, and the terminal maps ids
+to URIs. Ctrl+click opens explicit links before URLs found in the text, and
+hovering with Ctrl underlines the whole link. What is left: keyboard hints
+(below) could label explicit links as well.
 
 ### Underline color (SGR 58/59)
 
