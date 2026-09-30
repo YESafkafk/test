@@ -1,11 +1,12 @@
 ;;; Text extraction from the grid: selections, word / line boundaries,
 ;;; search matches and URLs.  Rows are absolute (see terminal-abs-row).
 (library (chezterm selection)
-  (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
+  (export line-at-abs cell-char word-bounds logical-line-bounds selection-text range-text
           line-text line-matches url-at text-url-at link-id-at link-ranges openable-url? uri-to-open
           uri-local-path
           target? target-uri target-start target-end target-label target-link
-          hint-targets text-url-target-at target-ranges prompt-view-offset)
+          hint-targets text-url-target-at target-ranges prompt-view-offset
+          command-output-range)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
 
   (define (line-at-abs term abs)
@@ -44,37 +45,40 @@
                    (if (and l (line-wrapped l) (line-at-abs term (+ a 1))) (loop (+ a 1)) a)))])
       (cons start end)))
 
-  ;; Text of the current selection.
-  (define (selection-text term)
-    (let ([sel (terminal-selection term)])
-      (and sel
-           (let* ([sa (vector-ref sel 1)] [sc (vector-ref sel 2)]
-                  [ea (vector-ref sel 3)] [ec (vector-ref sel 4)]
-                  [forward (or (< sa ea) (and (= sa ea) (<= sc ec)))]
-                  [r0 (if forward sa ea)] [c0 (if forward sc ec)]
-                  [r1 (if forward ea sa)] [c1 (if forward ec sc)]
-                  [block (eq? (vector-ref sel 0) 'block)]
-                  [out (open-output-string)])
-             (let loop ([abs r0])
-               (when (<= abs r1)
-                 (let ([l (line-at-abs term abs)])
-                   (when l
-                     (let* ([cols (line-cols l)]
-                            [from (cond [block (min sc ec)] [(= abs r0) c0] [else 0])]
-                            [to (cond [block (+ 1 (max sc ec))] [(= abs r1) (+ c1 1)] [else cols])]
-                            [to (min to cols)]
-                            [content (line-content-length l)]
-                            [trimmed-to (if (or block (not (line-wrapped l)) (= abs r1)) (min to content) to)])
-                       (let ([text (line-text l from trimmed-to)])
-                         ;; like xterm, drop trailing blanks at line ends
-                         (put-string out (if (or block (not (line-wrapped l)) (= abs r1))
-                                             (string-trim-right text)
-                                             text)))
-                       (when (and (< abs r1) (or block (not (line-wrapped l))))
-                         (newline out)))))
-                 (loop (+ abs 1))))
-             (let ([s (get-output-string out)])
-               (and (> (string-length s) 0) s))))))
+  ;; Text of the current selection, or #f.
+  (define (selection-text term) (range-text term (terminal-selection term)))
+
+  ;; Text of SEL, a selection (see terminal-set-selection!), or #f when it
+  ;; is #f or has no text.
+  (define (range-text term sel)
+    (and sel
+         (let* ([sa (vector-ref sel 1)] [sc (vector-ref sel 2)]
+                [ea (vector-ref sel 3)] [ec (vector-ref sel 4)]
+                [forward (or (< sa ea) (and (= sa ea) (<= sc ec)))]
+                [r0 (if forward sa ea)] [c0 (if forward sc ec)]
+                [r1 (if forward ea sa)] [c1 (if forward ec sc)]
+                [block (eq? (vector-ref sel 0) 'block)]
+                [out (open-output-string)])
+           (let loop ([abs r0])
+             (when (<= abs r1)
+               (let ([l (line-at-abs term abs)])
+                 (when l
+                   (let* ([cols (line-cols l)]
+                          [from (cond [block (min sc ec)] [(= abs r0) c0] [else 0])]
+                          [to (cond [block (+ 1 (max sc ec))] [(= abs r1) (+ c1 1)] [else cols])]
+                          [to (min to cols)]
+                          [content (line-content-length l)]
+                          [trimmed-to (if (or block (not (line-wrapped l)) (= abs r1)) (min to content) to)])
+                     (let ([text (line-text l from trimmed-to)])
+                       ;; like xterm, drop trailing blanks at line ends
+                       (put-string out (if (or block (not (line-wrapped l)) (= abs r1))
+                                           (string-trim-right text)
+                                           text)))
+                     (when (and (< abs r1) (or block (not (line-wrapped l))))
+                       (newline out)))))
+               (loop (+ abs 1))))
+           (let ([s (get-output-string out)])
+             (and (> (string-length s) 0) s)))))
 
   (define (string-trim-right s)
     (let loop ([k (string-length s)])
@@ -442,5 +446,115 @@
                [(or (< row first) (> row last)) #f]
                [(fxlogtest (line-marks-field (grid-line g row)) MARK-PROMPT) (max 0 (- row))]
                [else (loop (+ row dir))])))))
+
+;;; Shell integration: command output ------------------------------------
+;;; A command's output starts at its OSC 133;C mark and ends at the first
+;;; A (not a secondary prompt), C or D mark after it.  Marks keep their
+;;; columns, as foot's cmd_start and cmd_end, so output that does not end
+;;; in a newline ends where the next prompt starts on the same line; D is
+;;; optional, as in kitty, where the next prompt ends the output.
+;;; Positions are (row . col) pairs of relative rows (see grid-line), with
+;;; the column exclusive at the end.
+
+  ;; The marks KINDS present on line L at ROW, as (row col kind).
+  (define (marks-at l row kinds)
+    (fold-left (lambda (acc m) (let ([c (line-mark-col l m)]) (if c (cons (list row c m) acc) acc)))
+               '() kinds))
+
+  ;; The mark in MARKS (a non-empty list of (row col kind), all in one row)
+  ;; with the lowest column.
+  (define (leftmost marks)
+    (fold-left (lambda (a b) (if (< (cadr b) (cadr a)) b a)) (car marks) (cdr marks)))
+
+  ;; The first A, C or D mark at or after START in grid G's rows up to
+  ;; LAST, other than the C at START, as (row col kind), or #f.
+  (define (output-end g start last)
+    (let ([same (filter (lambda (m) (>= (cadr m) (cdr start)))
+                        (marks-at (grid-line g (car start)) (car start) (list MARK-PROMPT MARK-END)))])
+      (if (pair? same)
+          (leftmost same)
+          (let loop ([row (+ (car start) 1)])
+            (and (<= row last)
+                 (let ([ms (marks-at (grid-line g row) row (list MARK-PROMPT MARK-OUTPUT MARK-END))])
+                   (if (pair? ms) (leftmost ms) (loop (+ row 1)))))))))
+
+  ;; The column of the last character in columns [from, to) of line L
+  ;; that is not a blank, or #f.
+  (define (last-text-col l from to)
+    (let ([v (line-cells l)])
+      (let loop ([i (- (min to (line-cols l)) 1)])
+        (and (>= i from)
+             (let ([ch (cell-ch v i)])
+               (if (or (= ch 0) (= ch 32)) (loop (- i 1)) i))))))
+
+  ;; The output from START to END in grid G as a selection with absolute
+  ;; rows, without the trailing blanks and blank lines, and without the
+  ;; rest of START's row when that is blank and START is not at the start
+  ;; of the row; #f when there is no text in it.
+  (define (output-selection term g start end)
+    (let* ([start (let ([l (grid-line g (car start))])
+                    (if (and (> (cdr start) 0) (< (car start) (car end)) (not (line-wrapped l))
+                             (not (last-text-col l (cdr start) (line-cols l))))
+                        (cons (+ (car start) 1) 0)
+                        start))]
+           [last (let loop ([row (car end)])
+                   (and (>= row (car start))
+                        (let ([c (last-text-col (grid-line g row) (if (= row (car start)) (cdr start) 0)
+                                                (if (= row (car end)) (cdr end) (grid-cols g)))])
+                          (if c (cons row c) (loop (- row 1))))))])
+      (and last
+           (vector 'stream (terminal-abs-row term (car start)) (cdr start)
+                   (terminal-abs-row term (car last)) (cdr last)))))
+
+  ;; The output of a command in TERM as a selection (see
+  ;; terminal-set-selection!), or #f.  Commands without output are
+  ;; skipped.  WHICH is
+  ;;  - last: the last command's, as kitty's copy_last_command_output
+  ;;    (last_non_empty): its C mark is the last one at or above the
+  ;;    cursor's row.  A command that is still running has output up to
+  ;;    the end of the screen.  When no such C mark is left but history
+  ;;    lines were dropped, the lines at the top of the history up to the
+  ;;    first mark are taken, as kitty does, if that mark is an A or a D:
+  ;;    the output of a command whose C mark scrolled out of the history.
+  ;;  - first-on-screen: the first command's whose C mark is in the view,
+  ;;    as kitty's show_first_command_output_on_screen.
+  ;; Only the primary screen has command output.
+  (define (command-output-range term which)
+    (and (not (terminal-alt-screen? term))
+         (let* ([g (terminal-grid term)]
+                [first (- (grid-hist-count g))]
+                [last (- (grid-rows g) 1)]
+                [output-at
+                 (lambda (row)
+                   (let ([c (line-mark-col (grid-line g row) MARK-OUTPUT)])
+                     (and c
+                          (let* ([start (cons row c)] [end (output-end g start last)])
+                            (output-selection term g start
+                                              (if end (cons (car end) (cadr end)) (cons last (grid-cols g))))))))]
+                [orphan
+                 (lambda ()
+                   (and (> (grid-scroll-counter g) (grid-hist-count g))
+                        (let loop ([row first])
+                          (and (<= row last)
+                               (let ([ms (marks-at (grid-line g row) row
+                                                   (list MARK-PROMPT MARK-OUTPUT MARK-END))])
+                                 (if (null? ms)
+                                     (loop (+ row 1))
+                                     (let ([m (leftmost ms)])
+                                       (and (not (= (caddr m) MARK-OUTPUT))
+                                            (output-selection term g (cons first 0) (cons row (cadr m)))))))))))])
+           (case which
+             [(last)
+              (let loop ([row (min last (terminal-cursor-row term))])
+                (if (< row first)
+                    (orphan)
+                    (or (output-at row) (loop (- row 1)))))]
+             [(first-on-screen)
+              (let* ([top (- (terminal-display-offset term))]
+                     [bottom (min last (+ top (terminal-rows term) -1))])
+                (let loop ([row top])
+                  (and (<= row bottom)
+                       (or (output-at row) (loop (+ row 1))))))]
+             [else #f]))))
 
 )

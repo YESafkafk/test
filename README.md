@@ -36,7 +36,11 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - **Clipboard** (`wl_data_device`) and **primary selection**
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
 - **Jumping between prompts** (Ctrl+Shift+Z / Ctrl+Shift+X) that the shell
-  marks with OSC 133, as in kitty and foot; see [Shell integration](#shell-integration).
+  marks with OSC 133, as in kitty and foot, and **selecting or copying a
+  command's output** (`select-last-command-output`,
+  `copy-last-command-output` and the same for the first command output on
+  screen, not bound), as kitty's `copy_last_command_output`; see
+  [Shell integration](#shell-integration).
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
 - **Ctrl+click on links and URLs** opens them with the `open-command`
@@ -317,6 +321,34 @@ PS1='\[\e]133;A\e\\\]'$PS1
 PS0='\e]133;C\e\\'
 ```
 
+A command's output starts where its `C` was sent and ends where the next
+`A`, `C` or `D` was: marks keep their columns, as foot's do, so output
+that does not end in a newline ends where the next prompt starts on the
+same line. `D` is not needed, as in kitty, but when a shell sends it,
+nothing printed between it and the next prompt is output. Commands
+without output are skipped, and trailing blank lines are left out.
+- `select-last-command-output` selects the last command's output (the
+  command whose `C` is the last one at or above the cursor), and
+  `copy-last-command-output` copies it to the clipboard, as kitty's
+  `copy_last_command_output`. A command that is still running has its
+  output so far. When the command's `C` was dropped from the history,
+  what is left of its output at the top of the history is taken, as in
+  kitty.
+- `select-first-command-output-on-screen` and
+  `copy-first-command-output-on-screen` do the same for the first command
+  whose output starts in the view, as kitty's
+  `show_first_command_output_on_screen`: after Ctrl+Shift+Z, the command
+  below the prompt at the top.
+
+A selection made this way goes to the primary selection with
+`copy-on-select`, as one made with the mouse. None of them is bound by
+default, as in kitty and foot (kitty's Ctrl+Shift+G shows the last
+command's output in a pager, which chezterm does not have). For example:
+
+```scheme
+(bind "ctrl+shift+g" copy-last-command-output)
+```
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
@@ -374,6 +406,8 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 | Ctrl+Shift+Y | copy a link's or URL's URI with keyboard hints (`hint-copy`) |
 | (not bound) | paste a link's or URL's URI into the program with keyboard hints (`hint-paste`) |
 | (not bound) | select a link's or URL's text with keyboard hints (`hint-select`) |
+| (not bound) | select / copy the last command's output (`select-last-command-output`, `copy-last-command-output`) |
+| (not bound) | select / copy the first command output on screen (`select-first-command-output-on-screen`, `copy-first-command-output-on-screen`) |
 | Ctrl+Shift+K | clear the scrollback |
 | Ctrl+Shift+N | open a new window in the current directory |
 | F11 | toggle fullscreen |
@@ -426,7 +460,7 @@ Source layout (`src/chezterm/`):
 | `font.ss`, `boxdraw.ss` | fontconfig/FreeType glyphs, built-in box drawing |
 | `render.ss` | incremental software renderer (pixman) |
 | `keyboard.ss` | xkbcommon keymaps, compose, key encoding |
-| `selection.ss` | selection text, word/line bounds, search matches, links and URLs (hint targets) |
+| `selection.ss` | selection text, word/line bounds, search matches, links and URLs (hint targets), prompts and command output |
 | `hints.ss` | keyboard hint labels and key handling |
 | `pty.ss` | pseudo-terminal and process spawning |
 | `config.ss` | configuration |

@@ -480,6 +480,86 @@
     (feed t (esc "[?1049h"))
     (check "prompts: not on the alternate screen" #f (prompt-view-offset t -1))))
 
+;;; command output (OSC 133 C to the next A, C or D), as kitty's
+;;; copy_last_command_output and show_first_command_output_on_screen
+(define (cmd-out t which) (range-text t (command-output-range t which)))
+
+(let ([t (make-term 5 10 100)])
+  (check "command output: no marks at all" '(#f #f)
+         (begin (feed t "hello\r\nworld") (list (command-output-range t 'last)
+                                               (command-output-range t 'first-on-screen))))
+  ;; bash with the README's PS1 and PS0: A before the prompt, C after the
+  ;; command line, no D
+  (feed t "\r\n" (osc133 "A") "$ ls\r\n" (osc133 "C") "a\r\nb\r\n" (osc133 "A") "$ ")
+  (check "command output: last" "a\nb" (cmd-out t 'last))
+  (check "command output: the selection, absolute rows"
+         (vector 'stream (terminal-abs-row t 2) 0 (terminal-abs-row t 3) 0)
+         (command-output-range t 'last))
+  (feed t "true\r\n" (osc133 "C") (osc133 "A") "$ ")
+  (check "command output: a command without output is skipped" "a\nb" (cmd-out t 'last))
+  (feed t "printf x\r\n" (osc133 "C") "foo" (osc133 "A") "$ ")
+  (check "command output: no newline at the end, the prompt on its line" "foo" (cmd-out t 'last))
+  (check "command output: first on screen" "a\nb" (cmd-out t 'first-on-screen)))
+
+(let ([t (make-term 6 10 100)])
+  ;; with D, as kitty's and foot's shell integration send it
+  (feed t (osc133 "A") "$ a\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A") "$ b\r\n"
+        (osc133 "C") "foo" (osc133 "D;0") "\r\n" (osc133 "A") "$ c\r\n")
+  (check "command output: up to D, no newline at the end" "foo" (cmd-out t 'last))
+  (feed t (osc133 "C") "bar\r\n" (osc133 "D;1") "precmd\r\n" (osc133 "A") "$ ")
+  (check "command output: D ends it before the next prompt" "bar" (cmd-out t 'last))
+  ;; rows: $ a -2, out -1, $ b 0 (the screen: $ b, foo, $ c, bar, precmd, $)
+  (check "command output: first on screen, with D" "foo" (cmd-out t 'first-on-screen)))
+
+(let ([t (make-term 4 10 100)])
+  (feed t (osc133 "A") "$ cmd" (osc133 "C") "\r\n0123456789abc\r\n  x  \r\n\r\n\r\n" (osc133 "A") "$ ")
+  (check "command output: wrapped, indented, without the rest of the C row and the blank lines"
+         "0123456789abc\n  x" (cmd-out t 'last))
+  (check "command output: in the history" #t (< (terminal-rel-row t (vector-ref (command-output-range t 'last) 1)) 0))
+  (terminal-resize! t 4 4)
+  (check "command output: reflowed narrower" "0123456789abc\n  x" (cmd-out t 'last))
+  (terminal-resize! t 4 20)
+  (check "command output: reflowed wider" "0123456789abc\n  x" (cmd-out t 'last))
+  (feed t (osc133 "C") "partial\r\nmore")
+  (check "command output: a running command's, up to the end of the screen" "partial\nmore" (cmd-out t 'last))
+  (feed t (esc "[?1049h"))
+  (check "command output: not on the alternate screen" '(#f #f)
+         (list (command-output-range t 'last) (command-output-range t 'first-on-screen)))
+  (feed t (esc "[?1049l"))
+  (check "command output: back on the primary screen" "partial\nmore" (cmd-out t 'last)))
+
+;; the first on screen follows the view; the last does not
+(let ([t (make-term 3 10 100)])
+  (feed t (osc133 "A") "$ 1\r\n" (osc133 "C") "one\r\n" (osc133 "A") "$ 2\r\n" (osc133 "C")
+        (osc133 "A") "$ 3\r\n" (osc133 "C") "three\r\n3\r\n" (osc133 "A") "$ ")
+  ;; rows: $ 1 -4, one -3 (C), $ 2 -2, $ 3 -1 (C and A), three 0 (C), 3 1,
+  ;; $ 2 (the screen: three, 3, $)
+  (check "command output: first on screen" "three\n3" (cmd-out t 'first-on-screen))
+  (terminal-scroll-display! t 4)
+  (check "command output: first on screen, scrolled back" "one" (cmd-out t 'first-on-screen))
+  (terminal-scroll-display! t -2)
+  (check "command output: first on screen skips one without output" "three\n3" (cmd-out t 'first-on-screen))
+  (check "command output: last, scrolled back" "three\n3" (cmd-out t 'last))
+  (terminal-scroll-to-bottom! t)
+  (feed t "seq\r\n" (osc133 "C") "l1\r\nl2\r\nl3\r\n" (osc133 "A") "$ ")
+  (check "command output: first on screen, only its end in view" #f (command-output-range t 'first-on-screen))
+  (check "command output: last, only its end on screen" "l1\nl2\nl3" (cmd-out t 'last)))
+
+;; output whose C mark scrolled out of the history
+(let ([t (make-term 3 10 2)])
+  (feed t "banner\r\n" (osc133 "A") "$ ")
+  (check "command output: lines before the first prompt are not output" #f (command-output-range t 'last))
+  (feed t "seq\r\n" (osc133 "C") "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n" (osc133 "A") "$ ")
+  ;; history: 3 4, the screen: 5 6 $
+  (check "command output: C gone, the rest of the output" "3\n4\n5\n6" (cmd-out t 'last))
+  (feed t "x\r\n" (osc133 "C") (osc133 "A") "$ ")
+  (check "command output: C gone, then a command without output" "4\n5\n6" (cmd-out t 'last))
+  (check "command output: C gone, not on screen" #f (command-output-range t 'first-on-screen))
+  (feed t "y\r\n" (osc133 "C") "7\r\n" (osc133 "A") "$ ")
+  (check "command output: C gone, then another command" "7" (cmd-out t 'last))
+  (feed t "clear" (esc "[H") (esc "[2J") (esc "[3J") (osc133 "A") "$ ")
+  (check "command output: after clearing the history" #f (command-output-range t 'last)))
+
 ;;; scrollback view anchoring
 (let ([t (make-term 2 5)])
   (feed t "1\r\n2\r\n3\r\n4")
@@ -989,7 +1069,12 @@
   (check "default bindings: prompts, as in kitty and foot" '(scroll-to-previous-prompt scroll-to-next-prompt)
          (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+z" "ctrl+shift+x")))
   (check "default bindings: hint-paste and hint-select not bound" '()
-         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
+         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings)))
+  (check "default bindings: command output actions not bound, as in kitty and foot" '()
+         (filter (lambda (b) (memq (cdr b) '(select-last-command-output copy-last-command-output
+                                             select-first-command-output-on-screen
+                                             copy-first-command-output-on-screen)))
+                 (config-ref 'bindings))))
 
 ;;; options that are off by default
 (check "off by default: clipboard-read, bell-duration, mouse-hide-when-typing" '(deny 0 #f)

@@ -107,7 +107,12 @@
 ;;;   reset-font-size scroll-page-up scroll-page-down scroll-half-page-up
 ;;;   scroll-half-page-down scroll-line-up scroll-line-down scroll-to-top
 ;;;   scroll-to-bottom scroll-to-previous-prompt scroll-to-next-prompt
-;;;   (prompts the shell marks with OSC 133;A) clear-history clear-selection
+;;;   (prompts the shell marks with OSC 133;A) select-last-command-output
+;;;   copy-last-command-output (the last command's output, from its OSC
+;;;   133;C to the next A, C or D; copied to the clipboard)
+;;;   select-first-command-output-on-screen
+;;;   copy-first-command-output-on-screen (the same for the first command
+;;;   whose output starts in the view) clear-history clear-selection
 ;;;   reset spawn-new-instance
 ;;;   toggle-fullscreen search-forward search-backward
 ;;;   hint-open (open a link or URL with the open-command; http, https,
@@ -134,4 +139,5 @@
 ;; (bind "ctrl+shift+l" "ls -l\r")
 ;; (bind "ctrl+shift+s" hint-select)
 ;; (bind "ctrl+shift+p" hint-paste)
+;; (bind "ctrl+shift+g" copy-last-command-output)
 ;; (bind "f11" none)

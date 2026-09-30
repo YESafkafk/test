@@ -615,6 +615,10 @@
       [(scroll-to-bottom) (terminal-scroll-to-bottom! term)]
       [(scroll-to-previous-prompt) (scroll-to-prompt! -1)]
       [(scroll-to-next-prompt) (scroll-to-prompt! 1)]
+      [(select-last-command-output) (select-command-output! 'last)]
+      [(select-first-command-output-on-screen) (select-command-output! 'first-on-screen)]
+      [(copy-last-command-output) (copy-command-output! 'last)]
+      [(copy-first-command-output-on-screen) (copy-command-output! 'first-on-screen)]
       [(clear-history) (terminal-clear-history! term)]
       [(clear-selection) (terminal-selection-clear! term)]
       [(reset) (terminal-reset! term)]
@@ -635,6 +639,21 @@
     (let ([offset (prompt-view-offset term dir)])
       (when offset
         (terminal-scroll-display! term (- offset (terminal-display-offset term))))))
+
+  ;; Select the output of a command (see command-output-range), as a
+  ;; selection made with the mouse: it goes to the primary selection with
+  ;; copy-on-select.
+  (define (select-command-output! which)
+    (let ([sel (command-output-range term which)])
+      (when sel
+        (terminal-set-selection! term sel)
+        (when (config-ref 'copy-on-select) (copy-selection! 'primary)))))
+
+  ;; Copy the output of a command to the clipboard, as kitty's
+  ;; copy_last_command_output; the selection stays.
+  (define (copy-command-output! which)
+    (let ([text (range-text term (command-output-range term which))])
+      (when text (window-set-clipboard! win 'clipboard text))))
 
   ;; Open URI with the open-command, the URI appended as its last argument
   ;; (as Alacritty's hint command).
