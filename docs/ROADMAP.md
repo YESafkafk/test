@@ -62,23 +62,23 @@ files go into `protocols/` and the Makefile's `PROTOCOLS` list.
 ### Kitty keyboard protocol (done)
 
 Implemented: all five enhancement flags, the per-screen flags stacks in
-`terminal.ss`, the encoder in `keyboard.ss` (tested against the
-specification's examples) and release/repeat events in `app.ss`. What is
+`terminal.ss` (emptied by `RIS` and `DECSTR`), the encoder in `keyboard.ss`
+(tested against the specification's examples), release/repeat events in
+`app.ss`, Hyper and Meta when the keymap puts them on a modifier of their
+own (found by walking the keymap, as kitty does), and optionally `CSI u`
+for keys without a legacy encoding (`kitty-keyboard-legacy-csi-u`). What is
 left:
-- **Hyper and Meta modifiers.** Their bits (16, 32) can be encoded, but
-  `keyboard-update-modifiers!` never sets them. Keymaps usually put Hyper and
-  Meta on the same real modifier as Super or Alt, so their xkb indices say
-  nothing on their own. kitty works out the mapping by walking the keymap
-  (`xkb_keymap_key_for_each`) and keeping only modifiers that do not
-  overlap.
-- **Soft reset.** `DECSTR` keeps the flags; only `RIS` empties the stacks.
-  kitty clears them on both.
-- **Keys without a legacy encoding.** With flags 0, keys such as
-  Ctrl+Shift+letter, media keys and modified F13–F35 are sent as before (or
-  not at all), because the legacy encoding must not change. kitty sends
-  `CSI u` for them even in legacy mode, which the specification allows.
-- **Keys held across a focus change.** No release is reported for a key
-  that is held when the window loses focus, as in kitty.
+- **Hyper and Meta on a shared modifier.** Most keymaps put Hyper on Mod4
+  with Super and Meta on Mod1 with Alt. Such a Hyper key then reports
+  Super, as in kitty: the compositor only sends real modifiers, so the two
+  cannot be told apart.
+- **Keys pressed while the window was unfocused.** Their release, after the
+  focus came back, is reported although the application never saw the
+  press. foot does the same, kitty drops such releases. Keys held when the
+  focus leaves get no release, as in kitty and foot.
+- **Other keys without a legacy encoding.** With flags 0, only keys that
+  send nothing at all can be sent as `CSI u`. Keys such as Ctrl+Shift+letter
+  or modified F13–F20 keep their legacy bytes, which kitty replaces.
 
 ### Keyboard hints (Alacritty's "hints")
 

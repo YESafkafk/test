@@ -50,8 +50,9 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   with all five progressive enhancements (disambiguated escape codes, press,
   repeat and release events, shifted and base-layout keys, all keys as escape
   codes, associated text), a flags stack per screen, and the `CSI ? u` query.
-  Programs such as Neovim, Helix, kakoune and fish use it to tell apart keys
-  like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
+  Hyper and Meta are reported when the keymap puts them on a modifier of
+  their own. Programs such as Neovim, Helix, kakoune and fish use it to tell
+  apart keys like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
@@ -325,8 +326,8 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
   window has no title bar.
 - Fractional scaling is rounded to the next integer scale.
 - No Alacritty vi mode, hints UI or IME (`text-input-v3`).
-- The kitty keyboard protocol reports no Hyper and Meta modifiers (see the
-  roadmap).
+- The kitty keyboard protocol reports Hyper and Meta only when they have a
+  modifier of their own; most keymaps share them with Super and Alt.
 - Underline colors (SGR 58) are parsed but not drawn, so the terminfo entry
   does not advertise `Setulc`.
 
