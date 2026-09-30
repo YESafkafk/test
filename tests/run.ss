@@ -163,6 +163,24 @@
   (check "combining stored" "\x301;"
          (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 0 #f)))
 
+;; erasing with a colored background, then partly and wholly with the
+;; default one: cells are stored differently for default colors
+(let ([t (make-term 3 6)])
+  (define (colors row)
+    (let ([v (line-cells (grid-line (terminal-grid t) row))])
+      (map (lambda (i) (list (cell-fg v i) (cell-bg v i))) (iota 6))))
+  (feed t (esc "[31;44m") (esc "[2K") "ab")
+  (check "BCE erase" (append '((1 4) (1 4)) (make-list 4 (list COLOR-FG 4))) (colors 0))
+  (feed t (esc "[0m") (esc "[1;4H") (esc "[K"))
+  (check "partial default erase"
+         (append '((1 4) (1 4)) (list (list COLOR-FG 4)) (make-list 3 (list COLOR-FG COLOR-BG)))
+         (colors 0))
+  (feed t (esc "[2J"))
+  (check "whole default erase" (make-list 6 (list COLOR-FG COLOR-BG)) (colors 0))
+  (check "erased cells are empty" "" (row-text t 0))
+  (feed t (esc "[42m") (esc "[3;1H") "\n")
+  (check "scrolled-in line takes the background" (make-list 6 (list COLOR-FG 2)) (colors 2)))
+
 ;; combining marks go away with their cells, whether there are fewer marks
 ;; than cleared cells or more
 (define (mark-cols t row)

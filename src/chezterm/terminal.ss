@@ -384,8 +384,8 @@
                        [l (cur-line t)]
                        [v (line-cells l)]
                        [attrs (fxsll (terminal-attrs t) 21)]
-                       [fg (terminal-fg t)]
-                       [bg (terminal-bg t)])
+                       [fg (fg-field (terminal-fg t))]
+                       [bg (bg-field (terminal-bg t))])
                   (when (terminal-selection t) (touch-row! t (terminal-cursor-row t)))
                   (fix-wide-edges! t l col (fx+ col n))
                   (line-extra-delete! l col (fx+ col n))
