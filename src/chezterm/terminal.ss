@@ -6,7 +6,8 @@
 ;;; movement, erasing, insert/delete, scroll regions, SGR with 256 and direct
 ;;; colors and underline styles, alternate screen, bracketed paste, mouse
 ;;; tracking modes, focus events, synchronized output, OSC title / colors /
-;;; clipboard, device status and attribute reports, DEC line drawing, etc.
+;;; clipboard, device status and attribute reports, DEC line drawing, the
+;;; flags of the kitty keyboard protocol, etc.
 (library (chezterm terminal)
   (export make-terminal terminal? terminal-feed! terminal-resize!
           terminal-rows terminal-cols terminal-grid terminal-primary-grid
@@ -23,6 +24,7 @@
           terminal-set-callbacks! terminal-reset! terminal-clear-history!
           terminal-cwd terminal-dirty? terminal-dirty-set!
           terminal-set-cell-pixel-size! terminal-set-defaults!
+          terminal-keyboard-flags terminal-set-kitty-keyboard!
           color->rgb make-default-palette)
   (import (chezscheme) (chezterm grid) (chezterm charwidth))
 
@@ -90,7 +92,10 @@
      (mutable strbuf) (mutable esc-in-string)
      (mutable default-cursor-style) (mutable default-cursor-blink)
      ;; primary screen cursor while the alternate screen is shown
-     (mutable primary-cursor))
+     (mutable primary-cursor)
+     ;; kitty keyboard protocol: whether it is enabled, and the flags
+     ;; stacks of the primary and alternate screens (see keyboard-flags!)
+     (mutable kitty-keyboard) (mutable kbd-primary) (mutable kbd-alt))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -116,7 +121,8 @@
                        #f '()
                        (open-output-string) #f
                        cursor-style cursor-blink
-                       #f)])
+                       #f
+                       #t '() '())])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -160,6 +166,57 @@
   (define (terminal-sync-update? t) (terminal-sync-update t))
   (define (terminal-newline-mode? t) (terminal-newline-mode t))
   (define (terminal-dirty? t) (terminal-dirty t))
+
+  ;;; Kitty keyboard protocol -------------------------------------------------
+
+  ;; Each screen has a stack of progressive enhancement flags, a list with
+  ;; the current flags first; the empty stack means 0.  As in kitty, the
+  ;; stack holds kbd-stack-size entries: pushing onto the empty stack also
+  ;; keeps the 0 below, pushing onto a full stack drops the oldest entry, and
+  ;; popping more entries than there are empties it.
+  (define kbd-stack-size 8)
+  (define kbd-supported-flags 31)   ; disambiguate, events, alternates, all keys, text
+
+  (define (kbd-stack t)
+    (if (terminal-alt-screen t) (terminal-kbd-alt t) (terminal-kbd-primary t)))
+
+  (define (kbd-stack-set! t s)
+    (if (terminal-alt-screen t) (terminal-kbd-alt-set! t s) (terminal-kbd-primary-set! t s)))
+
+  ;; The flags keys are encoded with: 0 while the protocol is disabled.
+  (define (terminal-keyboard-flags t)
+    (let ([s (kbd-stack t)])
+      (if (and (terminal-kitty-keyboard t) (pair? s)) (car s) 0)))
+
+  ;; Enable or disable the protocol.  While it is disabled, its control
+  ;; sequences are ignored, so CSI ? u gets no reply and applications keep
+  ;; to the legacy encoding.
+  (define (terminal-set-kitty-keyboard! t on)
+    (terminal-kitty-keyboard-set! t on))
+
+  (define (kbd-push! t flags)
+    (let ([s (kbd-stack t)] [flags (fxand flags kbd-supported-flags)])
+      (kbd-stack-set! t (cond
+                          [(null? s) (list flags 0)]
+                          [(fx< (length s) kbd-stack-size) (cons flags s)]
+                          [else (cons flags (list-head s (fx- kbd-stack-size 1)))]))))
+
+  (define (kbd-pop! t n)
+    (let ([s (kbd-stack t)])
+      (kbd-stack-set! t (if (fx< n (length s)) (list-tail s n) '()))))
+
+  ;; CSI = flags ; mode u.  Mode 1 sets the flags, 2 adds and 3 removes the
+  ;; given bits.
+  (define (kbd-set! t flags mode)
+    (let* ([s (kbd-stack t)]
+           [cur (if (pair? s) (car s) 0)]
+           [flags (fxand flags kbd-supported-flags)]
+           [new (case mode
+                  [(1) flags]
+                  [(2) (fxior cur flags)]
+                  [(3) (fxand cur (fxnot flags))]
+                  [else cur])])
+      (kbd-stack-set! t (cons new (if (pair? s) (cdr s) '())))))
 
   (define (respond t s) ((terminal-respond t) s))
 
@@ -796,12 +853,19 @@
            [(#\n) (when (fx= (param t 0 0) 6)
                     (respond t (format "\x1b;[?~a;~aR" (fx+ 1 (terminal-cursor-row t))
                                        (fx+ 1 (terminal-cursor-col t)))))]
+           [(#\u) (when (terminal-kitty-keyboard t)            ; kitty keyboard query
+                    (respond t (format "\x1b;[?~au" (terminal-keyboard-flags t))))]
            [else (void)])]
         [(and (eqv? private 62) (null? inter))          ; >
          (case (integer->char c)
            [(#\c) (respond t "\x1b;[>1;4000;0c")]
            [(#\q) (respond t "\x1b;P>|chezterm 0.1\x1b;\\")]
+           [(#\u) (when (terminal-kitty-keyboard t) (kbd-push! t (param t 0 0)))]
            [else (void)])]
+        [(and (eqv? private 60) (null? inter) (fx= c 117))     ; < u: pop keyboard flags
+         (when (terminal-kitty-keyboard t) (kbd-pop! t (param1 t 0 1)))]
+        [(and (eqv? private 61) (null? inter) (fx= c 117))     ; = u: set keyboard flags
+         (when (terminal-kitty-keyboard t) (kbd-set! t (param t 0 0) (param1 t 1 1)))]
         [(and (not private) (equal? inter '(32)) (fx= c 113))    ; SP q: DECSCUSR
          (let ([n (param t 0 0)])
            (if (fx= n 0)
@@ -1256,6 +1320,8 @@
     (terminal-focus-events-set! t #f)
     (terminal-reverse-video-set! t #f)
     (terminal-sync-update-set! t #f)
+    (terminal-kbd-primary-set! t '())
+    (terminal-kbd-alt-set! t '())
     (terminal-palette-set! t (vector-copy (terminal-default-palette t)))
     (terminal-tabs-set! t (make-tabs (terminal-cols t)))
     (terminal-cursor-row-set! t 0)
