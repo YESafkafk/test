@@ -1603,6 +1603,51 @@
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; underline colors: every style is drawn in the underline color when the
+  ;; cell has one, otherwise in the foreground color
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [colors-in (lambda (row c0 c1)
+                      (let loop ([y (+ 3 (* row chh))] [x (+ 3 (* c0 cw))] [acc '()])
+                        (cond [(= y (+ 3 (* (+ row 1) chh))) acc]
+                              [(= x (+ 3 (* c1 cw))) (loop (+ y 1) (+ 3 (* c0 cw)) acc)]
+                              [else
+                               (let ([p (logand #xFFFFFF (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                                                      (* 4 (+ x (* y (renderer-width r))))))])
+                                 (loop y (+ x 1) (if (memv p acc) acc (cons p acc))))])))]
+         [styles (lambda (ul)
+                   (apply string-append
+                          (map (lambda (s) (string-append (esc (format "[4:~a~am" s ul)) "  " (esc "[24m") " "))
+                               '(1 2 3 4 5))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t (esc "[38:2::255:0:0m") (styles ";58:2::0:200:0") "\r\n" (styles ";59") "\r\n"
+          (styles ";58:5:21") "\r\n" (esc "[8;4;58:2::0:200:0m") "  " (esc "[m"))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: render = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (for-each
+     (lambda (s)
+       (let ([c0 (* 3 (- s 1))])
+         (check (format "ul color: style ~a in the underline color" s) '(#x00C800 #x000000)
+                (list-sort > (colors-in 0 c0 (+ c0 2))))
+         (check (format "ul color: style ~a in the foreground" s) '(#xFF0000 #x000000)
+                (list-sort > (colors-in 1 c0 (+ c0 2))))
+         (check (format "ul color: style ~a in a palette color" s) '(#x0000FF #x000000)
+                (list-sort > (colors-in 2 c0 (+ c0 2))))))
+     '(1 2 3 4 5))
+    (check "ul color: hidden cells show no underline color" #f (memv #x00C800 (colors-in 3 0 2)))
+    ;; only the underline color changes: the row is redrawn
+    (feed t (esc "[1;1H") (esc "[4;58:2::0:0:255m") "  " (esc "[2;7H") (esc "[4:3;58:5:21m") "  ")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: changed = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (check "ul color: changed color drawn" '(#x0000FF #x000000) (list-sort > (colors-in 0 0 2)))
+    (feed t (esc "[1;1H") (esc "[59m") "  ")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: reset = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (feed t "\r\n\r\n\r\n\r\n")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: scrolled = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (renderer-free! r))
   ;; a hovered link is underlined through the highlights
   (let* ([t (make-term 6 20)]
          [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]

@@ -30,6 +30,7 @@ chezterm+base|chezterm common capabilities,
 # attributes
 	bold=\E[1m, dim=\E[2m, sitm=\E[3m, ritm=\E[23m,
 	smul=\E[4m, rmul=\E[24m, Smulx=\E[4:%p1%dm,
+	Setulc=\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm,
 	blink=\E[5m, rev=\E[7m, invis=\E[8m,
 	smso=\E[7m, rmso=\E[27m, smxx=\E[9m, rmxx=\E[29m,
 	sgr0=\E(B\E[m,

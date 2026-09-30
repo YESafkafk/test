@@ -12,12 +12,11 @@ to URIs. Ctrl+click opens explicit links before URLs found in the text, and
 hovering with Ctrl underlines the whole link. What is left: keyboard hints
 (below) could label explicit links as well.
 
-### Underline color (SGR 58/59)
+### Underline color (SGR 58/59) (done)
 
-This needs a per-cell color. The cheapest place is the line's `extra` table,
-because it is rare. `draw-underline!` already takes the color as a parameter.
-Once it is drawn, add `Setulc=\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm`
-to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
+Cells keep the color in the line's `extra` table, next to the hyperlink id,
+`draw-underline!` draws every style in it, and the terminfo entries
+advertise `Setulc`.
 
 ### Performance findings from the benchmarks
 

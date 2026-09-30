@@ -150,6 +150,20 @@
   (check "sgr bold+underline" (fxior ATTR-BOLD (fxsll UL-SINGLE ATTR-UNDERLINE-SHIFT))
          (fxand (fxior ATTR-BOLD ATTR-UNDERLINE-MASK) (attr-after t "sgr" 0 1 0 0 0 1 0 0 0))))
 
+(define (ul-color-at t row col) (line-ul-color (grid-line (terminal-grid t) row) col))
+
+(let ([t (make-term)])
+  (for-each
+   (lambda (term rgb)
+     (feed-bv t (tput term "Setulc" rgb)) (cap t "Smulx" UL-CURLY) (feed t "u")
+     (check (format "~a Setulc ~x" term rgb) (fxior COLOR-RGB rgb)
+            (ul-color-at t (terminal-cursor-row t) (- (terminal-cursor-col t) 1))))
+   '("chezterm" "chezterm" "chezterm-direct" "chezterm-direct")
+   '(#x123456 #xFF0000 #x00FF00 #x0000FF))
+  (cap t "sgr0") (feed t "v")
+  (check "sgr0 resets the underline color" #f
+         (ul-color-at t (terminal-cursor-row t) (- (terminal-cursor-col t) 1))))
+
 (let ([t (make-term)])
   (cap t "setaf" 1) (cap t "setab" 12) (feed t "a")
   (check "setaf < 8" 1 (fg-at t 0 0))

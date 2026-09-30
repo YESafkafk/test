@@ -15,7 +15,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   state machine, UTF-8). Supported:
   - cursor movement, erase, insert/delete of characters and lines, scroll regions, tab stops, `REP`
   - SGR with 16, 256 and 24-bit colors, bold, dim, italic, reverse, hidden, strikethrough,
-    and underline styles (single, double, curly, dotted, dashed; `4:x`)
+    underline styles (single, double, curly, dotted, dashed; `4:x`) and underline
+    colors (`58`/`59`)
   - alternate screen (`47`/`1047`/`1049`), `DECSC`/`DECRC`, origin mode, autowrap, insert mode
   - DEC special graphics (line drawing) charset
   - wide (CJK, emoji) and combining characters
@@ -215,7 +216,7 @@ entries:
 - `chezterm-direct`: `setaf`/`setab` take 24-bit values (ncurses `RGB`).
 
 Beyond the usual xterm capabilities they advertise:
-- underline styles (`Smulx`)
+- underline styles and colors (`Smulx`, `Setulc`)
 - synchronized output (`Sync`)
 - cursor shapes (`Ss`/`Se`) and cursor color (`Cs`/`Cr`)
 - the clipboard (`Ms`)
@@ -332,8 +333,6 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
 - No Alacritty vi mode, hints UI or IME (`text-input-v3`).
 - The kitty keyboard protocol reports Hyper and Meta only when they have a
   modifier of their own; most keymaps share them with Super and Alt.
-- Underline colors (SGR 58) are parsed but not drawn, so the terminfo entry
-  does not advertise `Setulc`.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.

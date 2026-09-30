@@ -574,7 +574,9 @@
                   [ul (fxsrl (fxand attrs ATTR-UNDERLINE-MASK) ATTR-UNDERLINE-SHIFT)]
                   [w (if (fxlogtest attrs ATTR-WIDE) (fx* 2 cw) cw)])
               (unless (fx= ul UL-NONE)
-                (draw-underline! r ul x (fx+ x w) y0 y1 fg))
+                ;; in the underline color (SGR 58) if the cell has one
+                (let ([uc (and ex (not (fxlogtest attrs ATTR-HIDDEN)) (line-ul-color l i))])
+                  (draw-underline! r ul x (fx+ x w) y0 y1 (if uc (color->rgb palette uc) fg))))
               (when (fxlogtest attrs ATTR-STRIKE)
                 (let ([sy (fx+ y0 (font-strikeout-position font))]
                       [t (font-underline-thickness font)])
