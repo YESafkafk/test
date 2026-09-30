@@ -354,13 +354,13 @@
               (when (terminal-insert-mode t)
                 (insert-blanks! t w))
               (fix-wide-edges! t l col (fx+ col w))
-              (when (line-extra l) (hashtable-delete! (line-extra l) col))
+              (line-extra-delete! l col (fx+ col 1))
               (let ([attrs (terminal-attrs t)] [fg (terminal-fg t)] [bg (terminal-bg t)])
                 (if (fx= w 2)
                     (begin
                       (cell-set! v col cp (fxior attrs ATTR-WIDE) fg bg)
                       (cell-set! v (fx+ col 1) 0 (fxior attrs ATTR-SPACER) fg bg)
-                      (when (line-extra l) (hashtable-delete! (line-extra l) (fx+ col 1))))
+                      (line-extra-delete! l (fx+ col 1) (fx+ col 2)))
                     (cell-set! v col cp attrs fg bg)))
               (terminal-last-char-set! t cp)
               (if (fx>= (fx+ col w) cols)
@@ -384,14 +384,11 @@
                        [l (cur-line t)]
                        [v (line-cells l)]
                        [attrs (fxsll (terminal-attrs t) 21)]
-                       [fg (terminal-fg t)]
-                       [bg (terminal-bg t)])
+                       [fg (fg-field (terminal-fg t))]
+                       [bg (bg-field (terminal-bg t))])
                   (when (terminal-selection t) (touch-row! t (terminal-cursor-row t)))
                   (fix-wide-edges! t l col (fx+ col n))
-                  (let ([ex (line-extra l)])
-                    (when ex
-                      (do ([c col (fx+ c 1)]) ((fx= c (fx+ col n)))
-                        (hashtable-delete! ex c))))
+                  (line-extra-delete! l col (fx+ col n))
                   (do ([k 0 (fx+ k 1)]) ((fx= k n))
                     (let ([idx (fx* 3 (fx+ col k))])
                       (fxvector-set! v idx (fxior (bytevector-u8-ref bv (fx+ i k)) attrs))
@@ -441,9 +438,7 @@
            [col (terminal-cursor-col t)] [n (fxmin n (fx- cols col))])
       (touch-row! t (terminal-cursor-row t))
       (fix-wide-edges! t l col (fx+ col n))
-      (let ([ex (line-extra l)])
-        (when ex
-          (do ([i col (fx+ i 1)]) ((fx>= i (fx+ col n))) (hashtable-delete! ex i))))
+      (line-extra-delete! l col (fx+ col n))
       (do ([i col (fx+ i 1)]) ((fx>= i (fx- cols n)))
         (cell-copy! v (fx+ i n) v i))
       (shift-extras! l col (fx- n) cols)

@@ -4,16 +4,22 @@
 ;;;   [codepoint | attrs << 21, foreground color, background color]
 ;;; Code point 0 marks a never-written (empty) cell.  Colors are 0-255 for
 ;;; palette entries, COLOR-FG / COLOR-BG for the defaults, or
-;;; COLOR-RGB | #xRRGGBB for direct colors.  Combining characters are kept in
-;;; a per-line table mapping a column to a string.
+;;; COLOR-RGB | #xRRGGBB for direct colors.  The color fields hold the color
+;;; XORed with its default (COLOR-FG or COLOR-BG), so that an empty cell with
+;;; default colors is all zeros and a whole line is cleared with
+;;; fxvector-fill!; cell-fg / cell-bg / cell-set! do the conversion.
+;;; Combining characters are kept in a per-line table mapping a column to a
+;;; string.
 (library (chezterm grid)
   (export ATTR-BOLD ATTR-DIM ATTR-ITALIC ATTR-UNDERLINE-MASK ATTR-UNDERLINE-SHIFT
           ATTR-BLINK ATTR-REVERSE ATTR-HIDDEN ATTR-STRIKE ATTR-WIDE ATTR-SPACER
           UL-NONE UL-SINGLE UL-DOUBLE UL-CURLY UL-DOTTED UL-DASHED
           COLOR-FG COLOR-BG COLOR-CURSOR COLOR-RGB
           cell-ch cell-attrs cell-fg cell-bg cell-set! cell-copy! cell-empty?
+          fg-field bg-field
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
-          line-extra line-extra-set! line-clear! line-fill! line-content-length
+          line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
+          line-content-length
           line-copy
           make-grid grid? grid-rows grid-cols grid-line grid-screen-line
           grid-hist-count grid-hist-capacity grid-scroll-counter
@@ -45,18 +51,23 @@
     (syntax-rules () [(_ v i) (fxand (fxvector-ref v (fx* 3 i)) #x1FFFFF)]))
   (define-syntax cell-attrs
     (syntax-rules () [(_ v i) (fxsrl (fxvector-ref v (fx* 3 i)) 21)]))
+  ;; the stored form of a foreground / background color (see above)
+  (define-syntax fg-field
+    (syntax-rules () [(_ c) (fxxor c 256)]))   ; COLOR-FG
+  (define-syntax bg-field
+    (syntax-rules () [(_ c) (fxxor c 257)]))   ; COLOR-BG
   (define-syntax cell-fg
-    (syntax-rules () [(_ v i) (fxvector-ref v (fx+ 1 (fx* 3 i)))]))
+    (syntax-rules () [(_ v i) (fg-field (fxvector-ref v (fx+ 1 (fx* 3 i))))]))
   (define-syntax cell-bg
-    (syntax-rules () [(_ v i) (fxvector-ref v (fx+ 2 (fx* 3 i)))]))
+    (syntax-rules () [(_ v i) (bg-field (fxvector-ref v (fx+ 2 (fx* 3 i))))]))
   (define-syntax cell-empty?
     (syntax-rules () [(_ v i) (fx= 0 (fxvector-ref v (fx* 3 i)))]))
 
   (define (cell-set! v i ch attrs fg bg)
     (let ([k (fx* 3 i)])
       (fxvector-set! v k (fxior ch (fxsll attrs 21)))
-      (fxvector-set! v (fx+ k 1) fg)
-      (fxvector-set! v (fx+ k 2) bg)))
+      (fxvector-set! v (fx+ k 1) (fg-field fg))
+      (fxvector-set! v (fx+ k 2) (bg-field bg))))
 
   (define (cell-copy! src si dst di)
     (let ([a (fx* 3 si)] [b (fx* 3 di)])
@@ -71,30 +82,38 @@
     (protocol
      (lambda (new)
        (lambda (cols)
-         (let ([v (make-fxvector (fx* 3 cols) 0)])
-           (do ([i 0 (fx+ i 1)]) ((fx= i cols))
-             (fxvector-set! v (fx+ 1 (fx* 3 i)) COLOR-FG)
-             (fxvector-set! v (fx+ 2 (fx* 3 i)) COLOR-BG))
-           (new v #f #f))))))
+         (new (make-fxvector (fx* 3 cols) 0) #f #f)))))
 
   (define (line-cols l) (fxquotient (fxvector-length (line-cells l)) 3))
 
+  ;; Remove the combining characters of columns [from, to).  A table that
+  ;; becomes empty is dropped, so that lines without combining characters
+  ;; skip it entirely.
+  (define (line-extra-delete! l from to)
+    (let ([ex (line-extra l)])
+      (when ex
+        (if (fx< (hashtable-size ex) (fx- to from))
+            (vector-for-each (lambda (k) (when (and (fx>= k from) (fx< k to)) (hashtable-delete! ex k)))
+                             (hashtable-keys ex))
+            (do ([i from (fx+ i 1)]) ((fx>= i to))
+              (hashtable-delete! ex i)))
+        (when (fx= 0 (hashtable-size ex)) (line-extra-set! l #f)))))
+
   ;; Clear cells [from, to) to empty with background BG.
   (define (line-fill! l from to bg)
-    (let ([v (line-cells l)])
-      (do ([i from (fx+ i 1)]) ((fx>= i to))
-        (let ([k (fx* 3 i)])
-          (fxvector-set! v k 0)
-          (fxvector-set! v (fx+ k 1) COLOR-FG)
-          (fxvector-set! v (fx+ k 2) bg)))
-      (let ([ex (line-extra l)])
-        (when ex
+    (let ([v (line-cells l)] [bgf (bg-field bg)])
+      (if (and (fx= bgf 0) (fx= from 0) (fx= to (line-cols l)))
+          (fxvector-fill! v 0)
           (do ([i from (fx+ i 1)]) ((fx>= i to))
-            (hashtable-delete! ex i))))))
+            (let ([k (fx* 3 i)])
+              (fxvector-set! v k 0)
+              (fxvector-set! v (fx+ k 1) 0)
+              (fxvector-set! v (fx+ k 2) bgf))))
+      (line-extra-delete! l from to)))
 
   (define (line-clear! l bg)
-    (line-fill! l 0 (line-cols l) bg)
     (line-extra-set! l #f)
+    (line-fill! l 0 (line-cols l) bg)
     (line-wrapped-set! l #f))
 
   (define (line-copy l)

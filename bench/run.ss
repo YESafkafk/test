@@ -240,30 +240,39 @@
 (define tmp-dir (or (getenv "TMPDIR") "/tmp"))
 
 ;; Run `cat FILE` on a pty and feed everything to T, rendering with R at
-;; most every 1/60 s.  Returns (values elapsed-ms frames).
+;; most every 1/60 s.  Like the event loop (see backlog in app.ss), while
+;; a read batch does not drain the pty the next frame also waits 4x the
+;; last frame's drawing time, up to 50 ms.  Returns (values elapsed-ms frames).
 (define (run-pipeline t r file)
   (let-values ([(fd pid) (pty-spawn (list "cat" file) pipe-rows pipe-cols 0 0 #f '())])
     (let ([buf (make-bytevector 65536)] [t0 (now-ms)] [frame-ms (/ 1000.0 60)])
       (define (read-available)
-        ;; up to 1 MiB, like the event loop; #t at end of file
+        ;; up to 16 reads, like the event loop: #t at end of file, 'more
+        ;; when the reads did not drain the pty
         (let loop ([k 0])
-          (and (< k 16)
-               (let ([m (pty-read fd buf)])
-                 (cond [(not m) #t]
-                       [(= m 0) #f]
-                       [else (terminal-feed! t buf m) (loop (+ k 1))])))))
-      (let loop ([next-frame (+ t0 frame-ms)] [frames 0])
+          (if (< k 16)
+              (let ([m (pty-read fd buf)])
+                (cond [(not m) #t]
+                      [(= m 0) #f]
+                      [else (terminal-feed! t buf m) (loop (+ k 1))]))
+              'more)))
+      (let loop ([next-frame (+ t0 frame-ms)] [backlog-next-frame t0] [frames 0])
         (wait-readable fd (- next-frame (now-ms)))
-        (let* ([eof (read-available)]
-               [due (>= (now-ms) next-frame)])
-          (when (or eof due) (render! t r))
+        (let* ([got (read-available)]
+               [eof (eq? got #t)]
+               [now (now-ms)]
+               [due (and (>= now next-frame)
+                         (or (not (eq? got 'more)) (>= now backlog-next-frame)))])
           (if eof
               (begin
+                (render! t r)
                 (close fd)
                 (pty-child-exited? pid)
                 (values (- (now-ms) t0) (+ frames 1)))
-              (loop (if due (+ (now-ms) frame-ms) next-frame)
-                    (if due (+ frames 1) frames))))))))
+              (if due
+                  (let* ([f0 (now-ms)] [_ (render! t r)] [f1 (now-ms)])
+                    (loop (+ f1 frame-ms) (+ f1 (min 50.0 (* 4 (- f1 f0)))) (+ frames 1)))
+                  (loop next-frame backlog-next-frame frames))))))))
 
 (for-each
  (lambda (name)

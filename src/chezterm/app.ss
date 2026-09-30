@@ -33,6 +33,14 @@
 
   (define write-queue '())        ; list of bytevectors pending for the pty
 
+  ;; Output backlog: while the pty has more output than one read batch
+  ;; takes, frames are spaced so that drawing takes at most about a fifth
+  ;; of the time (4x the last frame's drawing time), but never more than
+  ;; max-backlog-frame-gap ms apart.  Parsing gets the rest.
+  (define backlog #f)             ; the last read batch did not drain the pty
+  (define backlog-next-frame 0)   ; earliest time of the next frame during a backlog
+  (define max-backlog-frame-gap 50)
+
   (define bindings '())           ; list of ((mods . sym) . action)
 
   ;; key repeat
@@ -205,9 +213,10 @@
 
   ;; Read and process available pty output; returns #f on EOF.
   (define (read-pty!)
+    (set! backlog #f)
     (let loop ([k 0])
       (if (>= k 16)
-          #t
+          (begin (set! backlog #t) #t)
           (let ([n (pty-read pty-fd read-buffer)])
             (cond
               [(not n) #f]
@@ -259,14 +268,21 @@
              ;; doesn't, draw anyway after the timeout
              (< elapsed sync-timeout)))))
 
+  (define (backlog-hold?)
+    (and backlog (< (now-ms) backlog-next-frame)))
+
   (define (maybe-draw!)
     (when (and (window-can-present? win)
                (or need-redraw (terminal-dirty? term))
-               (not (sync-hold?)))
+               (not (sync-hold?))
+               (not (backlog-hold?)))
       (set! need-redraw #f)
       (terminal-dirty-set! term #f)
-      (let ([damage (renderer-render! renderer term focused blink-on search-highlights
-                                      (and search-active (search-overlay)))])
+      (let* ([t0 (now-ms)]
+             [damage (renderer-render! renderer term focused blink-on search-highlights
+                                       (and search-active (search-overlay)))]
+             [t1 (now-ms)])
+        (set! backlog-next-frame (+ t1 (min max-backlog-frame-gap (* 4 (- t1 t0)))))
         (unless (null? damage)
           (window-present! win (renderer-pixels renderer) (renderer-width renderer)
                            (renderer-height renderer) damage
@@ -711,6 +727,8 @@
            [ts (if (and (terminal-cursor-blink? term) focused (terminal-cursor-visible? term))
                    (cons (max 0 (- blink-next now)) ts) ts)]
            [ts (if (terminal-sync-update? term) (cons sync-timeout ts) ts)]
+           [ts (if (and backlog (or need-redraw (terminal-dirty? term)))
+                   (cons (max 0 (- backlog-next-frame now)) ts) ts)]
            [ts (if dump-frame (cons 50 ts) ts)])
       (if (null? ts) -1 (apply min ts))))
 

@@ -163,6 +163,88 @@
   (check "combining stored" "\x301;"
          (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 0 #f)))
 
+;; UTF-8: decoding whole sequences at once gives the same screen as
+;; feeding one byte at a time, including malformed input
+(for-each
+ (lambda (bytes)
+   (let ([a (make-term 3 12)] [b (make-term 3 12)] [bv (u8-list->bytevector bytes)])
+     (feed-bytes a bv)
+     (for-each (lambda (x) (feed-bytes b (u8-list->bytevector (list x)))) bytes)
+     (check (format "utf-8 ~s" bytes) (list (screen b) (cursor b)) (list (screen a) (cursor a)))))
+ '((#xC3 #xA9 #x41)                        ; é A
+   (#xE6 #x97 #xA5 #xE6 #x9C #xAC)         ; 日本
+   (#xF0 #x9F #x98 #x80 #x78)              ; emoji x
+   (#x65 #xCC #x81 #x78)                   ; e + combining acute
+   (#xC0 #x9B #x5B #x32 #x43 #x78)         ; overlong ESC: CSI 2 C
+   (#xC2 #x9B #x41)                        ; C1 CSI as a character
+   (#xED #xA0 #x80 #x41)                   ; surrogate
+   (#xF4 #x90 #x80 #x80 #x41)              ; above U+10FFFF
+   (#xE6 #x97 #x41 #x42)                   ; cut short by ASCII
+   (#xC3 #xC3 #xA9)                        ; lead byte instead of continuation
+   (#x80 #xBF #xF8 #xFF #x41)))            ; stray continuations, invalid leads
+
+;; CSI sequences: whole sequences in one buffer give the same screen,
+;; modes and replies as one byte at a time
+(for-each
+ (lambda (str)
+   (let* ([bytes (bytevector->u8-list (string->utf8 str))]
+          [run (lambda (whole?)
+                 (let ([t (make-term 4 12)])
+                   (feed t "abcdefghijkl\r\nmnopqrstuvwx\r\n")
+                   (if whole?
+                       (feed-bytes t (u8-list->bytevector bytes))
+                       (for-each (lambda (x) (feed-bytes t (u8-list->bytevector (list x)))) bytes))
+                   (feed t "Z")
+                   (list (screen t) (cursor t) responses (terminal-alt-screen? t)
+                         (terminal-app-cursor? t) (terminal-cursor-visible? t) (terminal-cursor-style t)
+                         (let ([v (line-cells (grid-line (terminal-grid t) (terminal-cursor-row t)))])
+                           (list (cell-attrs v (terminal-cursor-col t)) (cell-fg v 0) (cell-bg v 0))))))])
+     (check (format "csi ~s" str) (run #f) (run #t))))
+ (list (esc "[2;5H") (esc "[5G") (esc "[1;31;48:2::1:2:3m") (esc "[38;5;100;4:3m")
+       (esc "[?1049h") (esc "[?25l") (esc "[?1h") (esc "[>c") (esc "[6n") (esc "[?6n")
+       (esc "[2 q") (esc "[!p") (esc "[?1$p")               ; intermediates
+       (esc "[2\b;5H") (esc "[1\x18;31m") (esc "[1\x1b;[31m") ; controls inside
+       (esc "[?1;?2h") (esc "[1<m") (esc "[;5H") (esc "[:3m")  ; misplaced markers, empty
+       (esc "[99999999999;1H") (esc "[" (apply string-append (map (lambda (i) "1;") (iota 40))) "7m")
+       (esc "[2;3") (esc "[")))                               ; cut off
+
+;; erasing with a colored background, then partly and wholly with the
+;; default one: cells are stored differently for default colors
+(let ([t (make-term 3 6)])
+  (define (colors row)
+    (let ([v (line-cells (grid-line (terminal-grid t) row))])
+      (map (lambda (i) (list (cell-fg v i) (cell-bg v i))) (iota 6))))
+  (feed t (esc "[31;44m") (esc "[2K") "ab")
+  (check "BCE erase" (append '((1 4) (1 4)) (make-list 4 (list COLOR-FG 4))) (colors 0))
+  (feed t (esc "[0m") (esc "[1;4H") (esc "[K"))
+  (check "partial default erase"
+         (append '((1 4) (1 4)) (list (list COLOR-FG 4)) (make-list 3 (list COLOR-FG COLOR-BG)))
+         (colors 0))
+  (feed t (esc "[2J"))
+  (check "whole default erase" (make-list 6 (list COLOR-FG COLOR-BG)) (colors 0))
+  (check "erased cells are empty" "" (row-text t 0))
+  (feed t (esc "[42m") (esc "[3;1H") "\n")
+  (check "scrolled-in line takes the background" (make-list 6 (list COLOR-FG 2)) (colors 2)))
+
+;; combining marks go away with their cells, whether there are fewer marks
+;; than cleared cells or more
+(define (mark-cols t row)
+  (let ([ex (line-extra (grid-line (terminal-grid t) row))])
+    (if ex (list-sort < (vector->list (hashtable-keys ex))) '())))
+
+(let ([t (make-term 3 10)])
+  (feed t "a\x301;bc\x301;de\x301;fg\x301;h")
+  (check "marks stored" '(0 2 4 6) (mark-cols t 0))
+  (feed t (esc "[1;3H") "\x3b1;")
+  (check "overwrite drops a mark" '(0 4 6) (mark-cols t 0))
+  (feed t (esc "[1;4H") (esc "[3X"))
+  (check "erase drops marks" '(0 6) (mark-cols t 0))
+  (feed t (esc "[1;1H") "YZ")
+  (check "ASCII run drops a mark" '(6) (mark-cols t 0))
+  (feed t (esc "[1;7H") (esc "[K"))
+  (check "last mark dropped" '() (mark-cols t 0))
+  (check "text after mark changes" "YZα" (row-text t 0)))
+
 (let ([t (make-term 3 10)])
   (feed t "main" (esc "[?1049h") "alt")
   (check "alt screen (cursor kept)" '("    alt" "" "") (screen t))
@@ -472,6 +554,18 @@
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; a full redraw sets every pixel, also in a window that is not a whole
+  ;; number of cells and has more rows and columns than the terminal
+  (let ([t (make-term 4 15)])
+    (feed t (esc "[44m") "blue" (esc "[0m") " text\r\n" (esc "[7m") "rev")
+    (let ([over (lambda (garbage)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 11 (* 20 (font-cell-width f))) (+ 13 (* 6 (font-cell-height f))))
+                    (do ([i 0 (+ i 1)]) ((= i (* (renderer-width r) (renderer-height r))))
+                      (foreign-set! 'unsigned-32 (renderer-pixels r) (* 4 i) garbage))
+                    (renderer-render! r t #t #t (lambda (a) '()) #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))])
+      (check "full redraw sets every pixel" #t (equal? (over #xABABABAB) (over #x5C5C5C5C)))))
   ;; the tile cache: more glyph/color combinations than it holds (8192), so
   ;; entries are evicted, and earlier screens drawn again after that
   (let* ([t (make-term 6 20)]

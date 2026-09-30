@@ -22,14 +22,27 @@ to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
 ### Performance findings from the benchmarks
 
 [BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with
-measurements:
-- since everything is compiled at `optimize-level 2`, parsing is 7–53%
-  slower, depending on the workload. The parser's hot loops are the place to
-  win that back without dropping the checks.
-- Unicode text parses about 2.5× slower than ASCII
-- rendering during streaming output halves pipeline throughput at large sizes.
+measurements. Clearing lines, per-column removal of combining marks, the
+full-frame fill and drawing at 60 Hz during output floods have been fixed.
+What is left:
+- **Unicode text parses about 2.5× slower than ASCII.** The cost is in
+  `print!`, per non-ASCII character, not in UTF-8 decoding. A run-based
+  print for non-ASCII text, like `print-ascii-run!`, would batch the width,
+  wrap and wide-edge checks.
+- **Rendering dense text is bound by pixman.** It copies one tile per cell,
+  about 3 ms of a 6 ms 250×75 frame. Fewer copies would need larger cached
+  units: whole rows reused when they reappear, or glyph runs composited
+  through `pixman_composite_glyphs`, which would need new bindings in
+  `ffi/spec.ss`. A GPU backend (below) removes this cost.
+- **Scrolling moves the screen's line vector by one on every line feed.** A
+  ring-indexed screen would avoid that, but touches every `grid-screen-line`
+  user.
+- **Filling the scrollback allocates its lines**, and GC copies them while
+  they age. That costs about 20% of `parse/ascii`, but only until the
+  history is full.
 
-Check each change with `make bench-ab BASE=main`.
+Check each change with `make bench-ab BASE=main`. When the change is in
+`bench/run.ss` itself, use each side's own runner (see BENCHMARKS.md).
 
 ## Medium
 
