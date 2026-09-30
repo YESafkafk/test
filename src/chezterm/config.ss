@@ -39,6 +39,7 @@
       (decorations . #t)
       (term . #f)                       ; #f: "chezterm" if its terminfo is found
       (env . ())
+      (kitty-keyboard . #t)             ; answer the kitty keyboard protocol
       (cursor-style . block)            ; block | underline | beam
       (cursor-blink . #f)
       (cursor-blink-interval . 750)

@@ -31,6 +31,11 @@
                                  ; direct-color setaf/setab, or "xterm-256color"
                                  ; if you ssh to hosts without the entry.
 (env)                            ; extra variables: (env ("KEY" . "value") ...)
+(kitty-keyboard #t)              ; the kitty keyboard protocol: programs can ask
+                                 ; for unambiguous keys, releases and more
+                                 ; (CSI > flags u).  #f: its control sequences
+                                 ; are ignored, CSI ? u gets no reply, and keys
+                                 ; are always sent the legacy (xterm) way.
 
 ;;; Cursor -------------------------------------------------------------------
 (cursor-style block)             ; block | underline | beam

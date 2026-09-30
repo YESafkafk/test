@@ -47,6 +47,10 @@
   (define repeat-key #f)          ; evdev keycode
   (define repeat-event #f)
   (define repeat-next 0)
+  ;; evdev keycodes of held keys whose press chezterm kept to itself (a key
+  ;; binding, the search prompt, a compose sequence): their releases are not
+  ;; reported to the application either
+  (define consumed-keys '())
 
   ;; cursor blinking
   (define blink-on #t)
@@ -179,6 +183,7 @@
     (load-config config-file)
     (load-bindings!)
     (terminal-set-defaults! term (build-palette) (config-ref 'cursor-style) (config-ref 'cursor-blink))
+    (terminal-set-kitty-keyboard! term (config-ref 'kitty-keyboard))
     (read-padding!)
     (renderer-free! renderer)
     (set! renderer (create-renderer font))
@@ -524,17 +529,27 @@
 
   ;;; Keyboard -----------------------------------------------------------------------------
 
+  ;; Handle a key press or repeat; #t when chezterm consumed it.
   (define (key-press! ev)
     (cond
-      [search-active (search-key! ev)]
-      [(find-binding ev) => run-action!]
-      [else
-       (let ([bytes (encode-key ev (terminal-app-cursor? term) (terminal-app-keypad? term)
-                                (terminal-newline-mode? term))])
-         (when bytes
-           (terminal-scroll-to-bottom! term)
-           (reset-blink!)
-           (send! bytes)))]))
+      [search-active (search-key! ev) #t]
+      [(find-binding ev) => (lambda (action) (run-action! action) #t)]
+      [else (send-key! ev) #f]))
+
+  (define (send-key! ev)
+    (let ([bytes (encode-key ev (terminal-app-cursor? term) (terminal-app-keypad? term)
+                             (terminal-newline-mode? term) (terminal-keyboard-flags term))])
+      (when bytes
+        ;; modifier keys and releases (kitty keyboard protocol) keep the view
+        (unless (or (= (key-event-type ev) KEY-RELEASE) (key-event-modifier-key? ev))
+          (terminal-scroll-to-bottom! term)
+          (reset-blink!))
+        (send! bytes))))
+
+  (define (key-release! key ev)
+    (if (memv key consumed-keys)
+        (set! consumed-keys (remv key consumed-keys))
+        (when ev (send-key! ev))))
 
   ;;; Mouse --------------------------------------------------------------------------------
 
@@ -688,19 +703,27 @@
            (set-font! font-size s)))]
       [(focus)
        (set! focused (car args))
-       (unless focused (set! repeat-key #f))
+       (unless focused (set! repeat-key #f) (set! consumed-keys '()))
        (when (terminal-focus-events? term) (send! (if focused "\x1b;[I" "\x1b;[O")))
        (set! need-redraw #t)]
       [(key-press)
        (let ([ev (car args)] [key (cadr args)])
-         (key-press! ev)
-         (if (and (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
-             (begin
-               (set! repeat-key key)
-               (set! repeat-event ev)
-               (set! repeat-next (+ (now-ms) (window-repeat-delay win))))
-             (set! repeat-key #f)))]
-      [(key-release) (when (eqv? (car args) repeat-key) (set! repeat-key #f))]
+         (set! consumed-keys (remv key consumed-keys))
+         (cond
+           [(not ev) (set! consumed-keys (cons key consumed-keys))]     ; composing
+           [else
+            (when (or (key-press! ev) (key-event-composed? ev))
+              (set! consumed-keys (cons key consumed-keys)))
+            (if (and (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
+                (begin
+                  (set! repeat-key key)
+                  (set! repeat-event (key-event-with-type ev KEY-REPEAT))
+                  (set! repeat-next (+ (now-ms) (window-repeat-delay win))))
+                (set! repeat-key #f))]))]
+      [(key-release)
+       (let ([key (car args)])
+         (when (eqv? key repeat-key) (set! repeat-key #f))
+         (key-release! key (cadr args)))]
       [(pointer-enter) (pointer-motion! (car args) (cadr args))]
       [(pointer-leave) (void)]
       [(pointer-motion) (pointer-motion! (car args) (cadr args))]
@@ -899,6 +922,7 @@ Options:
         (set! term (make-terminal rows cols (config-ref 'scrollback) palette
                                   (config-ref 'cursor-style) (config-ref 'cursor-blink)))
         (terminal-set-cell-pixel-size! term (font-cell-width font) (font-cell-height font))
+        (terminal-set-kitty-keyboard! term (config-ref 'kitty-keyboard))
         (set! renderer (create-renderer font))
         (set! win (open-window on-window-event (or (opt 'title) (config-ref 'title))
                                (or (opt 'app-id) (config-ref 'app-id))
