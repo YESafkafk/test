@@ -13,7 +13,8 @@
 ;;; What does not fit into the fxvector is kept in a per-line table, the
 ;;; line's extras, mapping a column to a cell extra (see below): combining
 ;;; characters and a hyperlink.  A line's marks record the shell
-;;; integration marks (OSC 133) printed on it, see MARK-PROMPT.
+;;; integration marks (OSC 133) printed on it and their columns, see
+;;; MARK-PROMPT.
 (library (chezterm grid)
   (export ATTR-BOLD ATTR-DIM ATTR-ITALIC ATTR-UNDERLINE-MASK ATTR-UNDERLINE-SHIFT
           ATTR-BLINK ATTR-REVERSE ATTR-HIDDEN ATTR-STRIKE ATTR-WIDE ATTR-SPACER
@@ -22,7 +23,7 @@
           cell-ch cell-attrs cell-fg cell-bg cell-ul-color cell-set! cell-copy! cell-empty?
           fg-field bg-field ul-field
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
-          line-marks-field line-marks-field-set! line-add-marks!
+          line-marks-field line-marks-field-set! line-set-mark! line-mark-flags line-mark-col
           MARK-PROMPT MARK-SECONDARY-PROMPT MARK-OUTPUT MARK-END
           line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
           make-extra extra-marks extra-link
@@ -148,10 +149,19 @@
   ;; such as a continuation line's starts on it (A with k=s, kitty), the
   ;; command's output starts (C), the command ended (D).  They stay with
   ;; the line the cursor was on, into the history and through reflow.
+  ;; As foot does for C and D, the column of the latest A, C and D on the
+  ;; line is kept too, in 16 bits each above the flags (mark-shift), so
+  ;; that a command's output can start and end within a line: output that
+  ;; does not end in a newline shares its last line with the next prompt.
   (define MARK-PROMPT 1)
   (define MARK-SECONDARY-PROMPT 2)
   (define MARK-OUTPUT 4)
   (define MARK-END 8)
+  (define MARK-FLAGS 15)
+  (define max-mark-col #xFFFF)
+  ;; where mark M's column is kept, or #f when it has none
+  (define (mark-shift m)
+    (cond [(fx= m MARK-OUTPUT) 4] [(fx= m MARK-END) 20] [(fx= m MARK-PROMPT) 36] [else #f]))
 
   (define-record-type line
     (fields (mutable cells) (mutable wrapped) (mutable extra)
@@ -161,8 +171,22 @@
        (lambda (cols)
          (new (make-fxvector (fx* 3 cols) 0) #f #f 0)))))
 
-  (define (line-add-marks! l m)
-    (line-marks-field-set! l (fxior (line-marks-field l) m)))
+  ;; Add mark M (one of the MARK- bits), made at column COL.
+  (define (line-set-mark! l m col)
+    (let ([field (fxior (line-marks-field l) m)] [shift (mark-shift m)])
+      (line-marks-field-set!
+       l (if shift
+             (fxior (fxand field (fxnot (fxsll max-mark-col shift)))
+                    (fxsll (fxmax 0 (fxmin col max-mark-col)) shift))
+             field))))
+
+  (define (line-mark-flags l) (fxand (line-marks-field l) MARK-FLAGS))
+
+  ;; The column of mark M (MARK-PROMPT, MARK-OUTPUT or MARK-END) on line L,
+  ;; or #f when L has none.
+  (define (line-mark-col l m)
+    (and (fxlogtest (line-marks-field l) m)
+         (fxand (fxsrl (line-marks-field l) (mark-shift m)) max-mark-col)))
 
   (define (line-cols l) (fxquotient (fxvector-length (line-cells l)) 3))
 
@@ -321,8 +345,9 @@
 
   (define (join-logical group)
     ;; returns (values cells extras length marks) where length excludes
-    ;; trailing blanks and marks is an alist (offset . marks) of the lines
-    ;; with marks, by the offset they start at, in order
+    ;; trailing blanks and marks is an alist (offset . mark) of the marks
+    ;; on the lines, by offset: where the mark's column is, or where its
+    ;; line starts for a mark without one
     (let* ([total (apply fx+ (map line-cols group))]
            [v (make-fxvector (fx* 3 total) 0)]
            [extras '()]
@@ -331,7 +356,10 @@
         (unless (null? ls)
           (let* ([l (car ls)] [c (line-cols l)] [src (line-cells l)])
             (unless (fx= 0 (line-marks-field l))
-              (set! marks (cons (cons off (line-marks-field l)) marks)))
+              (for-each (lambda (m)
+                          (when (fxlogtest (line-marks-field l) m)
+                            (set! marks (cons (cons (fx+ off (fxmin c (or (line-mark-col l m) 0))) m) marks))))
+                        (list MARK-PROMPT MARK-SECONDARY-PROMPT MARK-OUTPUT MARK-END)))
             ;; a wrapped line may end in a padding cell left before a wide
             ;; character that did not fit; those are marked as spacers.
             (do ([i 0 (fx+ i 1)]) ((fx= i (fx* 3 c)))
@@ -346,11 +374,12 @@
                      [(fx< i 0) 0]
                      [(and (cell-empty? v i) (fx= (cell-bg v i) COLOR-BG)) (trim (fx- i 1))]
                      [else (fx+ i 1)]))])
-        (values v extras len (reverse marks)))))
+        (values v extras len (list-sort (lambda (a b) (fx< (car a) (car b))) (reverse marks))))))
 
   ;; Split a logical line into physical lines of COLS columns.  MARKS (from
-  ;; join-logical) go to the line that holds their offset, or the last line
-  ;; when the offset is past the content.
+  ;; join-logical) go to the line and column that hold their offset, or,
+  ;; when the offset is past the content, as far past the end of the last
+  ;; line's content, up to just past its last column.
   (define (split-logical v extras len cols want-offset marks)
     ;; returns (values lines cursor-pos) where cursor-pos is (row . col) of
     ;; want-offset (or #f)
@@ -360,7 +389,8 @@
                      pos)])
         (cond
           [(fx>= i len)
-           (for-each (lambda (m) (line-add-marks! cur (cdr m))) marks)
+           (for-each (lambda (m) (line-set-mark! cur (cdr m) (fxmin (fx+ col (fx- (car m) len)) cols)))
+                     marks)
            (let* ([lines (reverse (cons cur lines))]
                   [pos (or pos
                            (and want-offset
@@ -391,7 +421,7 @@
                [else
                 (let apply-marks ()
                   (when (and (pair? marks) (fx<= (caar marks) i))
-                    (line-add-marks! cur (cdar marks))
+                    (line-set-mark! cur (cdar marks) col)
                     (set! marks (cdr marks))
                     (apply-marks)))
                 (cell-copy! v i (line-cells cur) col)

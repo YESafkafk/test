@@ -1322,10 +1322,11 @@
       (get-output-string out)))
 
   ;;; OSC 133 shell integration ----------------------------------------------
-  ;;; OSC 133 ; A|C|D [; options] ST marks the line the cursor is on (see
-  ;;; MARK-PROMPT in grid.ss).  As in kitty, an A with the option k=s starts
-  ;;; a secondary prompt.  B (the end of the prompt), the other options and
-  ;;; D's exit status are ignored, as kitty and foot do.
+  ;;; OSC 133 ; A|C|D [; options] ST marks the line the cursor is on, at
+  ;;; the cursor's column (see MARK-PROMPT in grid.ss).  As in kitty, an A
+  ;;; with the option k=s starts a secondary prompt.  B (the end of the
+  ;;; prompt), the other options and D's exit status are ignored, as kitty
+  ;;; and foot do.
 
   (define (shell-mark! t rest)
     (let ([opts (string-split rest #\;)])
@@ -1335,7 +1336,11 @@
                    [(#\C) MARK-OUTPUT]
                    [(#\D) MARK-END]
                    [else 0])])
-          (unless (fx= m 0) (line-add-marks! (cur-line t) m))))))
+          ;; with a wrap pending, the cursor is past the last column
+          (unless (fx= m 0)
+            (line-set-mark! (cur-line t) m (if (terminal-wrap-pending t)
+                                               (terminal-cols t)
+                                               (terminal-cursor-col t))))))))
 
   ;;; OSC 8 hyperlinks --------------------------------------------------------
   ;;; OSC 8 ; params ; URI ST starts a link that the following characters get,

@@ -398,7 +398,8 @@
 ;;; OSC 133 shell integration: marks on the cursor's line, kept through
 ;;; the history and reflow
 (define (osc133 x) (esc "]133;" x "\x1b;\\"))
-(define (marks t row) (line-marks-field (grid-line (terminal-grid t) row)))
+(define (marks t row) (line-mark-flags (grid-line (terminal-grid t) row)))
+(define (mark-col t row m) (line-mark-col (grid-line (terminal-grid t) row) m))
 
 (let ([t (make-term 6 10)])
   (feed t (osc133 "A") "$ ls" (osc133 "B") "\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A;k=s")
@@ -406,6 +407,9 @@
   (check "OSC 133: A, C, D and secondary prompts; B ignored"
          (list MARK-PROMPT MARK-OUTPUT (fxior MARK-END MARK-SECONDARY-PROMPT MARK-PROMPT) 0)
          (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (check "OSC 133: the columns of A, C and D" '(0 0 0 2 #f)
+         (list (mark-col t 0 MARK-PROMPT) (mark-col t 1 MARK-OUTPUT) (mark-col t 2 MARK-END)
+               (mark-col t 2 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)))
   (feed t "\r\n\r\n\r\n\r\n\r\n")
   (check "OSC 133: marks go into the history" (list MARK-PROMPT MARK-OUTPUT)
          (list (marks t -2) (marks t -1)))
@@ -420,15 +424,39 @@
   (feed t (osc133 "A") "0123456789ab\r\n" "xyz01234567" (osc133 "C") "89\r\n" (osc133 "D"))
   (check "reflow marks: before" (list MARK-PROMPT 0 0 MARK-OUTPUT MARK-END)
          (map (lambda (r) (marks t r)) '(-1 0 1 2 3)))
+  (check "reflow marks: columns before" '(0 1 0) (list (mark-col t -1 MARK-PROMPT) (mark-col t 2 MARK-OUTPUT)
+                                                       (mark-col t 3 MARK-END)))
   (terminal-resize! t 4 5)
   (check "reflow marks: narrower" '("01234" "56789" "ab" "xyz01" "23456" "789" "")
          (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
   (check "reflow marks: on the lines that hold them, narrower"
          (list MARK-PROMPT 0 0 0 0 MARK-OUTPUT MARK-END)
          (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: columns, narrower" '(0 1 0) (list (mark-col t -3 MARK-PROMPT) (mark-col t 2 MARK-OUTPUT)
+                                                          (mark-col t 3 MARK-END)))
   (terminal-resize! t 4 20)
   (check "reflow marks: wider" (list MARK-PROMPT (fxior MARK-OUTPUT) MARK-END 0)
-         (map (lambda (r) (marks t r)) '(0 1 2 3))))
+         (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (check "reflow marks: columns, wider" '(0 11 0) (list (mark-col t 0 MARK-PROMPT) (mark-col t 1 MARK-OUTPUT)
+                                                        (mark-col t 2 MARK-END))))
+
+;;; a mark goes where its column is when a line is reflowed, and a mark
+;;; with a wrap pending is past the last column
+(let ([t (make-term 4 10 100)])
+  (feed t "abcdefghij" (osc133 "D") (osc133 "A") "$ " (osc133 "C"))
+  (check "marks: with a wrap pending, past the last column" '(10 10 #f)
+         (list (mark-col t 0 MARK-END) (mark-col t 0 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)))
+  (check "marks: C after the wrap" 2 (mark-col t 1 MARK-OUTPUT))
+  (feed t "\r\n" "0123" (osc133 "A") "4567")
+  (terminal-resize! t 4 3)
+  (check "reflow marks: by column" '("abc" "def" "ghi" "j$" "012" "345" "67")
+         (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: by column, the lines"
+         (list 0 0 0 (fxior MARK-END MARK-PROMPT MARK-OUTPUT) 0 MARK-PROMPT 0)
+         (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: by column, the columns (C past the content)" '(1 1 3 1)
+         (list (mark-col t 0 MARK-END) (mark-col t 0 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)
+               (mark-col t 2 MARK-PROMPT))))
 
 ;;; jumping between prompts: the line after the view's top is searched
 (let ([t (make-term 3 10 100)])
