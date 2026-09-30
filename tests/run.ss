@@ -163,6 +163,26 @@
   (check "combining stored" "\x301;"
          (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 0 #f)))
 
+;; UTF-8: decoding whole sequences at once gives the same screen as
+;; feeding one byte at a time, including malformed input
+(for-each
+ (lambda (bytes)
+   (let ([a (make-term 3 12)] [b (make-term 3 12)] [bv (u8-list->bytevector bytes)])
+     (feed-bytes a bv)
+     (for-each (lambda (x) (feed-bytes b (u8-list->bytevector (list x)))) bytes)
+     (check (format "utf-8 ~s" bytes) (list (screen b) (cursor b)) (list (screen a) (cursor a)))))
+ '((#xC3 #xA9 #x41)                        ; é A
+   (#xE6 #x97 #xA5 #xE6 #x9C #xAC)         ; 日本
+   (#xF0 #x9F #x98 #x80 #x78)              ; emoji x
+   (#x65 #xCC #x81 #x78)                   ; e + combining acute
+   (#xC0 #x9B #x5B #x32 #x43 #x78)         ; overlong ESC: CSI 2 C
+   (#xC2 #x9B #x41)                        ; C1 CSI as a character
+   (#xED #xA0 #x80 #x41)                   ; surrogate
+   (#xF4 #x90 #x80 #x80 #x41)              ; above U+10FFFF
+   (#xE6 #x97 #x41 #x42)                   ; cut short by ASCII
+   (#xC3 #xC3 #xA9)                        ; lead byte instead of continuation
+   (#x80 #xBF #xF8 #xFF #x41)))            ; stray continuations, invalid leads
+
 ;; erasing with a colored background, then partly and wholly with the
 ;; default one: cells are stored differently for default colors
 (let ([t (make-term 3 6)])
