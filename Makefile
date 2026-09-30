@@ -25,7 +25,8 @@ PROTO_LIB := src/chezterm/protocols.ss
 PROTOCOLS := protocols/wayland.xml protocols/xdg-shell.xml \
              protocols/xdg-decoration-unstable-v1.xml \
              protocols/primary-selection-unstable-v1.xml \
-             protocols/cursor-shape-v1.xml
+             protocols/cursor-shape-v1.xml \
+             protocols/xdg-activation-v1.xml
 
 .PHONY: all bindings protocols relink check-generated run test check clean install terminfo \
         bench bench-quick bench-compare bench-ab

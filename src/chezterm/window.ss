@@ -25,7 +25,7 @@
           window-set-clipboard! window-request-paste! window-poll-fds window-fd-ready!
           window-keyboard window-repeat-rate window-repeat-delay window-scale
           window-width window-height window-owns-selection? window-set-min-size!
-          window-close!)
+          window-set-urgent! window-close!)
   (import (chezscheme) (chezterm ffi) (chezterm cutil) (chezterm wayland)
           (chezterm protocols) (chezterm keyboard))
 
@@ -61,6 +61,7 @@
             (mutable clipboard-source) (mutable primary-source)
             (mutable clipboard-text) (mutable primary-text)
             (mutable reads)              ; list of #(fd which bytes tag)
+            (mutable urgency-token)      ; the pending activation token (window-set-urgent!)
             app-id title))
 
   (define (global w name) (let ([e (assoc name (window-globals w))]) (and e (cdr e))))
@@ -75,7 +76,7 @@
         (error 'chezterm "cannot connect to a Wayland display (is WAYLAND_DISPLAY set?)"))
       (let ([w (make-window d sink '() '() '() #f #f #f #f #f #f width height 1 #f #f '() #f
                             #f #f #f (make-keyboard) 25 600 0 0 #f #f #f #f #f
-                            0 0.0 #f #f #f #f #f (make-eqv-hashtable) #f #f #f #f '()
+                            0 0.0 #f #f #f #f #f (make-eqv-hashtable) #f #f #f #f '() #f
                             app-id title)])
         (let ([reg (wl_display_get_registry d)])
           (wl-listen! reg wl_registry
@@ -127,6 +128,7 @@
        (bind zwp_primary_selection_device_manager_v1 1)]
       [(string=? iface "zxdg_decoration_manager_v1") (bind zxdg_decoration_manager_v1 1)]
       [(string=? iface "wp_cursor_shape_manager_v1") (bind wp_cursor_shape_manager_v1 1)]
+      [(string=? iface "xdg_activation_v1") (bind xdg_activation_v1 1)]
       [else (void)]))
 
   (define (create-surface! w decorations?)
@@ -189,6 +191,31 @@
 
   (define (window-set-title! w title)
     (xdg_toplevel_set_title (window-toplevel w) title))
+
+  ;; Ask the compositor to mark the window as urgent, as foot's
+  ;; wayl_win_set_urgent does: get an xdg-activation token for our surface
+  ;; (without a serial, so it does not ask for focus) and, once it is done,
+  ;; activate our own surface with it.  sway, for one, turns that into an
+  ;; urgency hint while the window is not focused.  While a token is
+  ;; pending, no other is asked for.  #f when the compositor lacks
+  ;; xdg_activation_v1.
+  (define (window-set-urgent! w)
+    (let ([mgr (global w "xdg_activation_v1")])
+      (cond
+        [(not mgr) #f]
+        [(window-urgency-token w) #t]
+        [else
+         (let ([token (xdg_activation_v1_get_activation_token mgr)])
+           (window-urgency-token-set! w token)
+           (wl-listen! token xdg_activation_token_v1
+             (lambda (ev . args)
+               (when (eq? ev 'done)
+                 (xdg_activation_token_v1_destroy token)
+                 (window-urgency-token-set! w #f)
+                 (xdg_activation_v1_activate mgr (car args) (window-surface w)))))
+           (xdg_activation_token_v1_set_surface token (window-surface w))
+           (xdg_activation_token_v1_commit token)
+           #t)])))
 
   (define (window-toggle-fullscreen! w)
     (if (window-fullscreen w)

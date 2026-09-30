@@ -18,6 +18,7 @@
           terminal-bracketed-paste? terminal-mouse-mode terminal-mouse-sgr?
           terminal-mouse-utf8? terminal-focus-events? terminal-alternate-scroll?
           terminal-reverse-video? terminal-sync-update? terminal-newline-mode?
+          terminal-urgent-on-bell?
           terminal-display-offset terminal-scroll-display! terminal-scroll-to-bottom!
           terminal-selection terminal-set-selection! terminal-selection-clear!
           terminal-abs-row terminal-rel-row
@@ -111,7 +112,9 @@
      ;; the foreground field of printed cells (see ul-field)
      (mutable ul-color) (mutable ul-bits)
      ;; called for an OSC 52 query, see osc-clipboard!
-     (mutable on-clipboard-read))
+     (mutable on-clipboard-read)
+     ;; DEC mode 1042: whether BEL may mark the window as urgent (bell-urgent)
+     (mutable urgent-on-bell))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -141,7 +144,8 @@
                        #t '() '()
                        (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
                        #f #f 0
-                       (lambda (letter which term) (void)))])
+                       (lambda (letter which term) (void))
+                       #t)])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -180,6 +184,7 @@
   (define (terminal-cursor-visible? t) (terminal-cursor-visible t))
   (define (terminal-cursor-blink? t) (terminal-cursor-blink t))
   (define (terminal-alt-screen? t) (terminal-alt-screen t))
+  (define (terminal-urgent-on-bell? t) (terminal-urgent-on-bell t))
   (define (terminal-app-cursor? t) (terminal-app-cursor t))
   (define (terminal-app-keypad? t) (terminal-app-keypad t))
   (define (terminal-bracketed-paste? t) (terminal-bracketed-paste t))
@@ -1017,6 +1022,7 @@
       [(1005) (b (terminal-mouse-utf8 t))]
       [(1006) (b (terminal-mouse-sgr t))]
       [(1007) (b (terminal-alternate-scroll t))]
+      [(1042) (b (terminal-urgent-on-bell t))]
       [(2004) (b (terminal-bracketed-paste t))]
       [(2026) (b (terminal-sync-update t))]
       [else 0]))
@@ -1071,6 +1077,8 @@
         [(1005) (terminal-mouse-utf8-set! t on)]
         [(1006) (terminal-mouse-sgr-set! t on)]
         [(1007) (terminal-alternate-scroll-set! t on)]
+        ;; as in foot: set by default, and only allows what bell-urgent asks for
+        [(1042) (terminal-urgent-on-bell-set! t on)]
         [(2004) (terminal-bracketed-paste-set! t on)]
         [(2026) (terminal-sync-update-set! t (and on (real-time)))]
         [else (void)])))
@@ -1518,7 +1526,9 @@
     ;; hyperlink being printed
     (terminal-kbd-primary-set! t '())
     (terminal-kbd-alt-set! t '())
-    (set-link! t 0))
+    (set-link! t 0)
+    ;; as in foot, both resets allow urgency on BEL again
+    (terminal-urgent-on-bell-set! t #t))
 
   (define (terminal-reset! t)
     (leave-alt-screen! t)

@@ -77,6 +77,10 @@
                                  ; 0: no visual bell
 (bell-command #f)                ; program run on BEL, e.g.
                                  ; (bell-command "paplay" "/usr/share/sounds/freedesktop/stereo/bell.oga")
+(bell-urgent #f)                 ; #t: BEL marks the window as urgent while it
+                                 ; is not focused (xdg-activation-v1), as foot's
+                                 ; bell.urgent; programs can turn that off
+                                 ; with CSI ? 1042 l
 
 ;;; Colors -------------------------------------------------------------------
 (bold-is-bright #f)              ; draw bold text in bright colors

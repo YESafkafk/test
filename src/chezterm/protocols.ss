@@ -4,6 +4,7 @@
 ;;;   protocols/xdg-decoration-unstable-v1.xml
 ;;;   protocols/primary-selection-unstable-v1.xml
 ;;;   protocols/cursor-shape-v1.xml
+;;;   protocols/xdg-activation-v1.xml
 ;;; Do not edit; run `make protocols` to regenerate.
 
 (library (chezterm protocols)
@@ -19,7 +20,8 @@
    zwp_primary_selection_device_v1
    zwp_primary_selection_offer_v1
    zwp_primary_selection_source_v1 wp_cursor_shape_manager_v1
-   wp_cursor_shape_device_v1 WL_DISPLAY_ERROR_INVALID_OBJECT
+   wp_cursor_shape_device_v1 xdg_activation_v1
+   xdg_activation_token_v1 WL_DISPLAY_ERROR_INVALID_OBJECT
    WL_DISPLAY_ERROR_INVALID_METHOD WL_DISPLAY_ERROR_NO_MEMORY
    WL_DISPLAY_ERROR_IMPLEMENTATION WL_SHM_ERROR_INVALID_FORMAT
    WL_SHM_ERROR_INVALID_STRIDE WL_SHM_ERROR_INVALID_FD
@@ -227,18 +229,18 @@
    WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK
    WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE
    WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE
-   wl_display_sync wl_display_get_registry wl_registry_bind
-   wl_registry_destroy wl_callback_destroy
-   wl_compositor_create_surface wl_compositor_create_region
-   wl_compositor_destroy wl_shm_pool_create_buffer
-   wl_shm_pool_destroy wl_shm_pool_resize wl_shm_create_pool
-   wl_shm_destroy wl_buffer_destroy wl_data_offer_accept
-   wl_data_offer_receive wl_data_offer_destroy
-   wl_data_offer_finish wl_data_offer_set_actions
-   wl_data_source_offer wl_data_source_destroy
-   wl_data_source_set_actions wl_data_device_start_drag
-   wl_data_device_set_selection wl_data_device_release
-   wl_data_device_destroy
+   XDG_ACTIVATION_TOKEN_V1_ERROR_ALREADY_USED wl_display_sync
+   wl_display_get_registry wl_registry_bind wl_registry_destroy
+   wl_callback_destroy wl_compositor_create_surface
+   wl_compositor_create_region wl_compositor_destroy
+   wl_shm_pool_create_buffer wl_shm_pool_destroy
+   wl_shm_pool_resize wl_shm_create_pool wl_shm_destroy
+   wl_buffer_destroy wl_data_offer_accept wl_data_offer_receive
+   wl_data_offer_destroy wl_data_offer_finish
+   wl_data_offer_set_actions wl_data_source_offer
+   wl_data_source_destroy wl_data_source_set_actions
+   wl_data_device_start_drag wl_data_device_set_selection
+   wl_data_device_release wl_data_device_destroy
    wl_data_device_manager_create_data_source
    wl_data_device_manager_get_data_device
    wl_data_device_manager_destroy wl_shell_get_shell_surface
@@ -299,7 +301,15 @@
    wp_cursor_shape_manager_v1_get_pointer
    wp_cursor_shape_manager_v1_get_tablet_tool_v2
    wp_cursor_shape_device_v1_destroy
-   wp_cursor_shape_device_v1_set_shape)
+   wp_cursor_shape_device_v1_set_shape
+   xdg_activation_v1_destroy
+   xdg_activation_v1_get_activation_token
+   xdg_activation_v1_activate
+   xdg_activation_token_v1_set_serial
+   xdg_activation_token_v1_set_app_id
+   xdg_activation_token_v1_set_surface
+   xdg_activation_token_v1_commit
+   xdg_activation_token_v1_destroy)
   (import (chezscheme) (chezterm wayland))
   (define wl_display (make-wl-interface "wl_display" 1))
   (define wl_registry (make-wl-interface "wl_registry" 1))
@@ -352,6 +362,10 @@
     (make-wl-interface "wp_cursor_shape_manager_v1" 2))
   (define wp_cursor_shape_device_v1
     (make-wl-interface "wp_cursor_shape_device_v1" 2))
+  (define xdg_activation_v1
+    (make-wl-interface "xdg_activation_v1" 1))
+  (define xdg_activation_token_v1
+    (make-wl-interface "xdg_activation_token_v1" 1))
   (define messages-initialized
     (begin
       (wl-interface-set-messages!
@@ -704,6 +718,23 @@
           (list "destroy" "" (list))
           (list "set_shape" "uu" (list #f #f)))
         (vector))
+      (wl-interface-set-messages!
+        xdg_activation_v1
+        (vector
+          (list "destroy" "" (list))
+          (list
+            "get_activation_token"
+            "n"
+            (list xdg_activation_token_v1))
+          (list "activate" "so" (list #f wl_surface)))
+        (vector))
+      (wl-interface-set-messages!
+        xdg_activation_token_v1
+        (vector (list "set_serial" "uo" (list #f wl_seat))
+          (list "set_app_id" "s" (list #f))
+          (list "set_surface" "o" (list wl_surface))
+          (list "commit" "" (list)) (list "destroy" "" (list)))
+        (vector (list "done" "s" (list #f))))
       #t))
   (define (wl_display_sync proxy)
     (wl-marshal proxy wl_display 0 wl_callback #f 0 0))
@@ -1018,6 +1049,27 @@
            shape)
     (wl-marshal proxy wp_cursor_shape_device_v1 1 #f #f 0 serial
       shape))
+  (define (xdg_activation_v1_destroy proxy)
+    (wl-marshal proxy xdg_activation_v1 0 #f #f 1))
+  (define (xdg_activation_v1_get_activation_token proxy)
+    (wl-marshal proxy xdg_activation_v1 1
+      xdg_activation_token_v1 #f 0 0))
+  (define (xdg_activation_v1_activate proxy token surface)
+    (wl-marshal proxy xdg_activation_v1 2 #f #f 0 token
+      surface))
+  (define (xdg_activation_token_v1_set_serial proxy serial
+           seat)
+    (wl-marshal proxy xdg_activation_token_v1 0 #f #f 0 serial
+      seat))
+  (define (xdg_activation_token_v1_set_app_id proxy app_id)
+    (wl-marshal proxy xdg_activation_token_v1 1 #f #f 0 app_id))
+  (define (xdg_activation_token_v1_set_surface proxy surface)
+    (wl-marshal proxy xdg_activation_token_v1 2 #f #f 0
+      surface))
+  (define (xdg_activation_token_v1_commit proxy)
+    (wl-marshal proxy xdg_activation_token_v1 3 #f #f 0))
+  (define (xdg_activation_token_v1_destroy proxy)
+    (wl-marshal proxy xdg_activation_token_v1 4 #f #f 1))
   (define WL_DISPLAY_ERROR_INVALID_OBJECT 0)
   (define WL_DISPLAY_ERROR_INVALID_METHOD 1)
   (define WL_DISPLAY_ERROR_NO_MEMORY 2)
@@ -1315,4 +1367,5 @@
   (define WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT 34)
   (define WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK 35)
   (define WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE 36)
-  (define WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE 1))
+  (define WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE 1)
+  (define XDG_ACTIVATION_TOKEN_V1_ERROR_ALREADY_USED 0))

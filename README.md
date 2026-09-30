@@ -82,7 +82,9 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   foot, or else the shell's.
 - A visual bell on BEL, as in Alacritty: `(bell-duration 150)` flashes the
   window in the `bell` color (white by default), fading out over that many
-  milliseconds. Independently, an optional `bell-command` is run.
+  milliseconds. Independently, an optional `bell-command` is run, and
+  `(bell-urgent #t)` marks the window as urgent while it is not focused,
+  as foot's `bell.urgent` does (see [Bell](#bell)).
 - Its own terminfo entries, `chezterm` and `chezterm-direct` (see
   [Terminfo](#terminfo)), so programs know about underline styles,
   synchronized output, cursor shapes, the clipboard and true color.
@@ -243,6 +245,23 @@ ST), as in foot and Alacritty. With `deny` (the default), or when there is
 no text, the reply is empty (`OSC 52 ; c ; ST`), as kitty answers a read it
 does not allow, so that programs do not wait for a reply that never comes.
 
+### Bell
+
+On BEL, each of these happens if it is configured, independently of the
+others:
+- `bell-duration`: the visual bell, as in Alacritty.
+- `bell-command`: a program is run, at most every 100 ms.
+- `bell-urgent`: while the window is not focused, it is marked as urgent,
+  as foot's `bell.urgent` does. chezterm asks for an `xdg-activation-v1`
+  token for its window and activates the window with it; the compositor
+  decides what that means. sway, for one, marks the window as urgent
+  (with its default `focus_on_window_activation urgent`) until it is
+  focused. As in foot, a program can turn this off with `CSI ? 1042 l` and
+  back on with `CSI ? 1042 h`; it is on by default and after a reset, and
+  never enables urgency by itself. Without `xdg-activation-v1` in the
+  compositor, nothing happens: chezterm does not paint the margins red
+  instead, as foot does.
+
 ### Keyboard hints
 
 `hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y), `hint-paste` and
@@ -400,7 +419,7 @@ Source layout (`src/chezterm/`):
 | --- | --- |
 | `ffi.ss`, `protocols.ss` | generated bindings |
 | `wayland.ss` | Wayland client runtime (interfaces, marshalling, dispatch) |
-| `window.ss` | globals, xdg-shell window, shm buffers, seat input, clipboard, cursors |
+| `window.ss` | globals, xdg-shell window, shm buffers, seat input, clipboard, cursors, urgency |
 | `terminal.ss` | escape sequence parser and terminal state |
 | `grid.ss` | cell storage, scrollback ring, reflow |
 | `charwidth.ss` | character widths |
@@ -430,8 +449,6 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
   and URLs only; there are no user-defined regex hints.
 - The kitty keyboard protocol reports Hyper and Meta only when they have a
   modifier of their own; most keymaps share them with Super and Alt.
-- BEL does not mark the window as urgent (`xdg-activation-v1`), as foot's
-  `bell.urgent` does; the visual bell only shows while the window does.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.

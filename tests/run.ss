@@ -270,6 +270,23 @@
   (feed t (esc "[?2004$p"))
   (check "DECRQM" "\x1b;[?2004;1$y" (car responses)))
 
+;;; CSI ? 1042 (urgency on BEL): set by default, as in foot, and set again
+;;; by both resets
+(let ([t (make-term 5 10)])
+  (check "1042: set by default" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042$p"))
+  (check "1042: DECRQM set" "\x1b;[?1042;1$y" (car responses))
+  (feed t (esc "[?1042l"))
+  (check "1042: reset" #f (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042$p"))
+  (check "1042: DECRQM reset" "\x1b;[?1042;2$y" (car responses))
+  (feed t (esc "[?1042h"))
+  (check "1042: set" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042l") (esc "[!p"))
+  (check "1042: DECSTR sets it" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042l") (esc "c"))
+  (check "1042: RIS sets it" #t (terminal-urgent-on-bell? t)))
+
 (let ([t (make-term 5 10)] [title #f])
   (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (set! title s)) void void)
   (feed t (esc "]0;hello world\a"))

@@ -646,13 +646,17 @@
 
   (define last-bell -1000)
 
-  ;; BEL: flash the window (the visual bell), and run the configured bell
+  ;; BEL: flash the window (the visual bell), mark it as urgent while it is
+  ;; not focused (bell-urgent, as foot's bell.urgent, unless a program
+  ;; turned that off with CSI ? 1042 l), and run the configured bell
   ;; command, at most every 100 ms
   (define (ring-bell!)
     (let ([cmd (config-ref 'bell-command)] [t (now-ms)] [duration (config-ref 'bell-duration)])
       (when (and (real? duration) (> duration 0))
         (set! bell-start t)
         (set! need-redraw #t))
+      (when (and (not focused) (config-ref 'bell-urgent) (terminal-urgent-on-bell? term))
+        (window-set-urgent! win))
       (when (and cmd (> (- t last-bell) 100))
         (set! last-bell t)
         (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))

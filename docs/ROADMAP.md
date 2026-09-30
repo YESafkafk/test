@@ -34,15 +34,19 @@ What is left:
 - **Clicking in the command line to move the cursor**, which kitty offers
   with `A;click_events=1`.
 
-### Urgency on BEL (`xdg-activation-v1`)
+### Urgency on BEL (`xdg-activation-v1`) (done)
 
-The visual bell (`bell-duration`) only shows while the window is visible.
-foot's `bell.urgent` marks an unfocused window as urgent instead: it asks
-`xdg_activation_v1` for a token and activates its own surface with it,
-which sway (and others) turn into an urgency hint. sway offers the
-global. This needs `xdg-activation-v1.xml` in `protocols/` and the
-Makefile's `PROTOCOLS` list, binding it in `window.ss`, and an option such
-as `bell-urgent`.
+`(bell-urgent #t)` does what foot's `bell.urgent` does: on BEL while the
+window is not focused, `window-set-urgent!` asks `xdg_activation_v1` for
+a token with our surface (no serial or seat, as in foot) and activates
+the surface with it once the token is `done`; sway turns that into an
+urgency hint. While a token is pending, further BELs ask for none. As in
+foot, `CSI ? 1042 l` turns it off and `h` back on; foot's mode gates all
+bell actions, but chezterm's only gates urgency, which is how foot
+documents it and what xterm's `bellIsUrgent` mode means. What is left:
+- **Compositors without `xdg-activation-v1`.** foot paints the window's
+  margins red instead until it is focused. chezterm does nothing; the
+  renderer would need a margin color.
 
 ### Performance findings from the benchmarks
 
