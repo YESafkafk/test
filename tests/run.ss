@@ -183,6 +183,31 @@
    (#xC3 #xC3 #xA9)                        ; lead byte instead of continuation
    (#x80 #xBF #xF8 #xFF #x41)))            ; stray continuations, invalid leads
 
+;; CSI sequences: whole sequences in one buffer give the same screen,
+;; modes and replies as one byte at a time
+(for-each
+ (lambda (str)
+   (let* ([bytes (bytevector->u8-list (string->utf8 str))]
+          [run (lambda (whole?)
+                 (let ([t (make-term 4 12)])
+                   (feed t "abcdefghijkl\r\nmnopqrstuvwx\r\n")
+                   (if whole?
+                       (feed-bytes t (u8-list->bytevector bytes))
+                       (for-each (lambda (x) (feed-bytes t (u8-list->bytevector (list x)))) bytes))
+                   (feed t "Z")
+                   (list (screen t) (cursor t) responses (terminal-alt-screen? t)
+                         (terminal-app-cursor? t) (terminal-cursor-visible? t) (terminal-cursor-style t)
+                         (let ([v (line-cells (grid-line (terminal-grid t) (terminal-cursor-row t)))])
+                           (list (cell-attrs v (terminal-cursor-col t)) (cell-fg v 0) (cell-bg v 0))))))])
+     (check (format "csi ~s" str) (run #f) (run #t))))
+ (list (esc "[2;5H") (esc "[5G") (esc "[1;31;48:2::1:2:3m") (esc "[38;5;100;4:3m")
+       (esc "[?1049h") (esc "[?25l") (esc "[?1h") (esc "[>c") (esc "[6n") (esc "[?6n")
+       (esc "[2 q") (esc "[!p") (esc "[?1$p")               ; intermediates
+       (esc "[2\b;5H") (esc "[1\x18;31m") (esc "[1\x1b;[31m") ; controls inside
+       (esc "[?1;?2h") (esc "[1<m") (esc "[;5H") (esc "[:3m")  ; misplaced markers, empty
+       (esc "[99999999999;1H") (esc "[" (apply string-append (map (lambda (i) "1;") (iota 40))) "7m")
+       (esc "[2;3") (esc "[")))                               ; cut off
+
 ;; erasing with a colored background, then partly and wholly with the
 ;; default one: cells are stored differently for default colors
 (let ([t (make-term 3 6)])
