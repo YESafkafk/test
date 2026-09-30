@@ -53,6 +53,7 @@
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
       (bell-duration . 0)               ; ms of the visual bell's flash, 0: none
+      (bell-urgent . #f)                ; BEL marks an unfocused window as urgent
       (open-command . ("xdg-open"))     ; opens links and URLs; the URI is appended
       (clipboard-read . deny)           ; OSC 52 clipboard queries: allow | deny
       (hint-alphabet . "jfkdls;ahgurieowpq") ; characters of the keyboard hint labels

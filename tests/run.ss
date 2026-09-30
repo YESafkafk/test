@@ -270,6 +270,23 @@
   (feed t (esc "[?2004$p"))
   (check "DECRQM" "\x1b;[?2004;1$y" (car responses)))
 
+;;; CSI ? 1042 (urgency on BEL): set by default, as in foot, and set again
+;;; by both resets
+(let ([t (make-term 5 10)])
+  (check "1042: set by default" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042$p"))
+  (check "1042: DECRQM set" "\x1b;[?1042;1$y" (car responses))
+  (feed t (esc "[?1042l"))
+  (check "1042: reset" #f (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042$p"))
+  (check "1042: DECRQM reset" "\x1b;[?1042;2$y" (car responses))
+  (feed t (esc "[?1042h"))
+  (check "1042: set" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042l") (esc "[!p"))
+  (check "1042: DECSTR sets it" #t (terminal-urgent-on-bell? t))
+  (feed t (esc "[?1042l") (esc "c"))
+  (check "1042: RIS sets it" #t (terminal-urgent-on-bell? t)))
+
 (let ([t (make-term 5 10)] [title #f])
   (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (set! title s)) void void)
   (feed t (esc "]0;hello world\a"))
@@ -381,7 +398,8 @@
 ;;; OSC 133 shell integration: marks on the cursor's line, kept through
 ;;; the history and reflow
 (define (osc133 x) (esc "]133;" x "\x1b;\\"))
-(define (marks t row) (line-marks-field (grid-line (terminal-grid t) row)))
+(define (marks t row) (line-mark-flags (grid-line (terminal-grid t) row)))
+(define (mark-col t row m) (line-mark-col (grid-line (terminal-grid t) row) m))
 
 (let ([t (make-term 6 10)])
   (feed t (osc133 "A") "$ ls" (osc133 "B") "\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A;k=s")
@@ -389,6 +407,9 @@
   (check "OSC 133: A, C, D and secondary prompts; B ignored"
          (list MARK-PROMPT MARK-OUTPUT (fxior MARK-END MARK-SECONDARY-PROMPT MARK-PROMPT) 0)
          (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (check "OSC 133: the columns of A, C and D" '(0 0 0 2 #f)
+         (list (mark-col t 0 MARK-PROMPT) (mark-col t 1 MARK-OUTPUT) (mark-col t 2 MARK-END)
+               (mark-col t 2 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)))
   (feed t "\r\n\r\n\r\n\r\n\r\n")
   (check "OSC 133: marks go into the history" (list MARK-PROMPT MARK-OUTPUT)
          (list (marks t -2) (marks t -1)))
@@ -403,15 +424,39 @@
   (feed t (osc133 "A") "0123456789ab\r\n" "xyz01234567" (osc133 "C") "89\r\n" (osc133 "D"))
   (check "reflow marks: before" (list MARK-PROMPT 0 0 MARK-OUTPUT MARK-END)
          (map (lambda (r) (marks t r)) '(-1 0 1 2 3)))
+  (check "reflow marks: columns before" '(0 1 0) (list (mark-col t -1 MARK-PROMPT) (mark-col t 2 MARK-OUTPUT)
+                                                       (mark-col t 3 MARK-END)))
   (terminal-resize! t 4 5)
   (check "reflow marks: narrower" '("01234" "56789" "ab" "xyz01" "23456" "789" "")
          (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
   (check "reflow marks: on the lines that hold them, narrower"
          (list MARK-PROMPT 0 0 0 0 MARK-OUTPUT MARK-END)
          (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: columns, narrower" '(0 1 0) (list (mark-col t -3 MARK-PROMPT) (mark-col t 2 MARK-OUTPUT)
+                                                          (mark-col t 3 MARK-END)))
   (terminal-resize! t 4 20)
   (check "reflow marks: wider" (list MARK-PROMPT (fxior MARK-OUTPUT) MARK-END 0)
-         (map (lambda (r) (marks t r)) '(0 1 2 3))))
+         (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (check "reflow marks: columns, wider" '(0 11 0) (list (mark-col t 0 MARK-PROMPT) (mark-col t 1 MARK-OUTPUT)
+                                                        (mark-col t 2 MARK-END))))
+
+;;; a mark goes where its column is when a line is reflowed, and a mark
+;;; with a wrap pending is past the last column
+(let ([t (make-term 4 10 100)])
+  (feed t "abcdefghij" (osc133 "D") (osc133 "A") "$ " (osc133 "C"))
+  (check "marks: with a wrap pending, past the last column" '(10 10 #f)
+         (list (mark-col t 0 MARK-END) (mark-col t 0 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)))
+  (check "marks: C after the wrap" 2 (mark-col t 1 MARK-OUTPUT))
+  (feed t "\r\n" "0123" (osc133 "A") "4567")
+  (terminal-resize! t 4 3)
+  (check "reflow marks: by column" '("abc" "def" "ghi" "j$" "012" "345" "67")
+         (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: by column, the lines"
+         (list 0 0 0 (fxior MARK-END MARK-PROMPT MARK-OUTPUT) 0 MARK-PROMPT 0)
+         (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: by column, the columns (C past the content)" '(1 1 3 1)
+         (list (mark-col t 0 MARK-END) (mark-col t 0 MARK-PROMPT) (mark-col t 0 MARK-OUTPUT)
+               (mark-col t 2 MARK-PROMPT))))
 
 ;;; jumping between prompts: the line after the view's top is searched
 (let ([t (make-term 3 10 100)])
@@ -434,6 +479,86 @@
     (check "prompts: next at the bottom" 0 (prompt-view-offset t 1))
     (feed t (esc "[?1049h"))
     (check "prompts: not on the alternate screen" #f (prompt-view-offset t -1))))
+
+;;; command output (OSC 133 C to the next A, C or D), as kitty's
+;;; copy_last_command_output and show_first_command_output_on_screen
+(define (cmd-out t which) (range-text t (command-output-range t which)))
+
+(let ([t (make-term 5 10 100)])
+  (check "command output: no marks at all" '(#f #f)
+         (begin (feed t "hello\r\nworld") (list (command-output-range t 'last)
+                                               (command-output-range t 'first-on-screen))))
+  ;; bash with the README's PS1 and PS0: A before the prompt, C after the
+  ;; command line, no D
+  (feed t "\r\n" (osc133 "A") "$ ls\r\n" (osc133 "C") "a\r\nb\r\n" (osc133 "A") "$ ")
+  (check "command output: last" "a\nb" (cmd-out t 'last))
+  (check "command output: the selection, absolute rows"
+         (vector 'stream (terminal-abs-row t 2) 0 (terminal-abs-row t 3) 0)
+         (command-output-range t 'last))
+  (feed t "true\r\n" (osc133 "C") (osc133 "A") "$ ")
+  (check "command output: a command without output is skipped" "a\nb" (cmd-out t 'last))
+  (feed t "printf x\r\n" (osc133 "C") "foo" (osc133 "A") "$ ")
+  (check "command output: no newline at the end, the prompt on its line" "foo" (cmd-out t 'last))
+  (check "command output: first on screen" "a\nb" (cmd-out t 'first-on-screen)))
+
+(let ([t (make-term 6 10 100)])
+  ;; with D, as kitty's and foot's shell integration send it
+  (feed t (osc133 "A") "$ a\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A") "$ b\r\n"
+        (osc133 "C") "foo" (osc133 "D;0") "\r\n" (osc133 "A") "$ c\r\n")
+  (check "command output: up to D, no newline at the end" "foo" (cmd-out t 'last))
+  (feed t (osc133 "C") "bar\r\n" (osc133 "D;1") "precmd\r\n" (osc133 "A") "$ ")
+  (check "command output: D ends it before the next prompt" "bar" (cmd-out t 'last))
+  ;; rows: $ a -2, out -1, $ b 0 (the screen: $ b, foo, $ c, bar, precmd, $)
+  (check "command output: first on screen, with D" "foo" (cmd-out t 'first-on-screen)))
+
+(let ([t (make-term 4 10 100)])
+  (feed t (osc133 "A") "$ cmd" (osc133 "C") "\r\n0123456789abc\r\n  x  \r\n\r\n\r\n" (osc133 "A") "$ ")
+  (check "command output: wrapped, indented, without the rest of the C row and the blank lines"
+         "0123456789abc\n  x" (cmd-out t 'last))
+  (check "command output: in the history" #t (< (terminal-rel-row t (vector-ref (command-output-range t 'last) 1)) 0))
+  (terminal-resize! t 4 4)
+  (check "command output: reflowed narrower" "0123456789abc\n  x" (cmd-out t 'last))
+  (terminal-resize! t 4 20)
+  (check "command output: reflowed wider" "0123456789abc\n  x" (cmd-out t 'last))
+  (feed t (osc133 "C") "partial\r\nmore")
+  (check "command output: a running command's, up to the end of the screen" "partial\nmore" (cmd-out t 'last))
+  (feed t (esc "[?1049h"))
+  (check "command output: not on the alternate screen" '(#f #f)
+         (list (command-output-range t 'last) (command-output-range t 'first-on-screen)))
+  (feed t (esc "[?1049l"))
+  (check "command output: back on the primary screen" "partial\nmore" (cmd-out t 'last)))
+
+;; the first on screen follows the view; the last does not
+(let ([t (make-term 3 10 100)])
+  (feed t (osc133 "A") "$ 1\r\n" (osc133 "C") "one\r\n" (osc133 "A") "$ 2\r\n" (osc133 "C")
+        (osc133 "A") "$ 3\r\n" (osc133 "C") "three\r\n3\r\n" (osc133 "A") "$ ")
+  ;; rows: $ 1 -4, one -3 (C), $ 2 -2, $ 3 -1 (C and A), three 0 (C), 3 1,
+  ;; $ 2 (the screen: three, 3, $)
+  (check "command output: first on screen" "three\n3" (cmd-out t 'first-on-screen))
+  (terminal-scroll-display! t 4)
+  (check "command output: first on screen, scrolled back" "one" (cmd-out t 'first-on-screen))
+  (terminal-scroll-display! t -2)
+  (check "command output: first on screen skips one without output" "three\n3" (cmd-out t 'first-on-screen))
+  (check "command output: last, scrolled back" "three\n3" (cmd-out t 'last))
+  (terminal-scroll-to-bottom! t)
+  (feed t "seq\r\n" (osc133 "C") "l1\r\nl2\r\nl3\r\n" (osc133 "A") "$ ")
+  (check "command output: first on screen, only its end in view" #f (command-output-range t 'first-on-screen))
+  (check "command output: last, only its end on screen" "l1\nl2\nl3" (cmd-out t 'last)))
+
+;; output whose C mark scrolled out of the history
+(let ([t (make-term 3 10 2)])
+  (feed t "banner\r\n" (osc133 "A") "$ ")
+  (check "command output: lines before the first prompt are not output" #f (command-output-range t 'last))
+  (feed t "seq\r\n" (osc133 "C") "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n" (osc133 "A") "$ ")
+  ;; history: 3 4, the screen: 5 6 $
+  (check "command output: C gone, the rest of the output" "3\n4\n5\n6" (cmd-out t 'last))
+  (feed t "x\r\n" (osc133 "C") (osc133 "A") "$ ")
+  (check "command output: C gone, then a command without output" "4\n5\n6" (cmd-out t 'last))
+  (check "command output: C gone, not on screen" #f (command-output-range t 'first-on-screen))
+  (feed t "y\r\n" (osc133 "C") "7\r\n" (osc133 "A") "$ ")
+  (check "command output: C gone, then another command" "7" (cmd-out t 'last))
+  (feed t "clear" (esc "[H") (esc "[2J") (esc "[3J") (osc133 "A") "$ ")
+  (check "command output: after clearing the history" #f (command-output-range t 'last)))
 
 ;;; scrollback view anchoring
 (let ([t (make-term 2 5)])
@@ -944,7 +1069,12 @@
   (check "default bindings: prompts, as in kitty and foot" '(scroll-to-previous-prompt scroll-to-next-prompt)
          (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+z" "ctrl+shift+x")))
   (check "default bindings: hint-paste and hint-select not bound" '()
-         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
+         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings)))
+  (check "default bindings: command output actions not bound, as in kitty and foot" '()
+         (filter (lambda (b) (memq (cdr b) '(select-last-command-output copy-last-command-output
+                                             select-first-command-output-on-screen
+                                             copy-first-command-output-on-screen)))
+                 (config-ref 'bindings))))
 
 ;;; options that are off by default
 (check "off by default: clipboard-read, bell-duration, mouse-hide-when-typing" '(deny 0 #f)

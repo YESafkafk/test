@@ -24,25 +24,40 @@ style in it, and the terminfo entries advertise `Setulc`.
 
 Lines keep the OSC 133 marks printed on them (A, secondary prompts, C and
 D) in a fixnum field of the line record, which is 0 for most lines and
-reset when a line is cleared, so printing costs nothing extra. Reflow
-moves a mark to the line that holds the start of its old line. The
+reset when a line is cleared, so printing costs nothing extra. The same
+field holds the column of the latest A, C and D on the line (16 bits
+each), as foot keeps `cmd_start` and `cmd_end`; reflow moves a mark to
+the line and column that hold its old position. The
 `scroll-to-previous-prompt` and `scroll-to-next-prompt` actions use the A
 marks, as kitty's `scroll_to_prompt` and foot's `prompt-prev`/`prompt-next`.
-What is left:
-- **Selecting or copying a command's output**, from its C mark to the next
-  prompt (kitty's `show_last_command_output`, foot's `pipe-command-output`).
-- **Clicking in the command line to move the cursor**, which kitty offers
-  with `A;click_events=1`.
+`select-last-command-output`, `copy-last-command-output` and the
+`...-first-command-output-on-screen` pair take a command's output from its
+C to the next A, C or D (`command-output-range` in `selection.ss`). Which
+command follows kitty (`last_non_empty` and `first_on_screen`: commands
+without output are skipped, D is optional); the columns make the range
+exact where foot's is, with or without D. What is left:
+- **Piping a command's output to a program or a pager**, as foot's
+  `pipe-command-output` and kitty's `show_last_command_output` (Ctrl+Shift+G,
+  a pager in an overlay window). chezterm has no overlay; a
+  `pipe-command-output` action with a command, like `open-command`, would
+  fit.
+- **Clicking to select a command's output**, kitty's
+  `mouse_select_command_output`, and **clicking in the command line to move
+  the cursor**, which kitty offers with `A;click_events=1`.
 
-### Urgency on BEL (`xdg-activation-v1`)
+### Urgency on BEL (`xdg-activation-v1`) (done)
 
-The visual bell (`bell-duration`) only shows while the window is visible.
-foot's `bell.urgent` marks an unfocused window as urgent instead: it asks
-`xdg_activation_v1` for a token and activates its own surface with it,
-which sway (and others) turn into an urgency hint. sway offers the
-global. This needs `xdg-activation-v1.xml` in `protocols/` and the
-Makefile's `PROTOCOLS` list, binding it in `window.ss`, and an option such
-as `bell-urgent`.
+`(bell-urgent #t)` does what foot's `bell.urgent` does: on BEL while the
+window is not focused, `window-set-urgent!` asks `xdg_activation_v1` for
+a token with our surface (no serial or seat, as in foot) and activates
+the surface with it once the token is `done`; sway turns that into an
+urgency hint. While a token is pending, further BELs ask for none. As in
+foot, `CSI ? 1042 l` turns it off and `h` back on; foot's mode gates all
+bell actions, but chezterm's only gates urgency, which is how foot
+documents it and what xterm's `bellIsUrgent` mode means. What is left:
+- **Compositors without `xdg-activation-v1`.** foot paints the window's
+  margins red instead until it is focused. chezterm does nothing; the
+  renderer would need a margin color.
 
 ### Performance findings from the benchmarks
 

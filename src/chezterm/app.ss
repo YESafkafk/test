@@ -615,6 +615,10 @@
       [(scroll-to-bottom) (terminal-scroll-to-bottom! term)]
       [(scroll-to-previous-prompt) (scroll-to-prompt! -1)]
       [(scroll-to-next-prompt) (scroll-to-prompt! 1)]
+      [(select-last-command-output) (select-command-output! 'last)]
+      [(select-first-command-output-on-screen) (select-command-output! 'first-on-screen)]
+      [(copy-last-command-output) (copy-command-output! 'last)]
+      [(copy-first-command-output-on-screen) (copy-command-output! 'first-on-screen)]
       [(clear-history) (terminal-clear-history! term)]
       [(clear-selection) (terminal-selection-clear! term)]
       [(reset) (terminal-reset! term)]
@@ -636,6 +640,21 @@
       (when offset
         (terminal-scroll-display! term (- offset (terminal-display-offset term))))))
 
+  ;; Select the output of a command (see command-output-range), as a
+  ;; selection made with the mouse: it goes to the primary selection with
+  ;; copy-on-select.
+  (define (select-command-output! which)
+    (let ([sel (command-output-range term which)])
+      (when sel
+        (terminal-set-selection! term sel)
+        (when (config-ref 'copy-on-select) (copy-selection! 'primary)))))
+
+  ;; Copy the output of a command to the clipboard, as kitty's
+  ;; copy_last_command_output; the selection stays.
+  (define (copy-command-output! which)
+    (let ([text (range-text term (command-output-range term which))])
+      (when text (window-set-clipboard! win 'clipboard text))))
+
   ;; Open URI with the open-command, the URI appended as its last argument
   ;; (as Alacritty's hint command).
   (define (open-uri! uri)
@@ -646,13 +665,17 @@
 
   (define last-bell -1000)
 
-  ;; BEL: flash the window (the visual bell), and run the configured bell
+  ;; BEL: flash the window (the visual bell), mark it as urgent while it is
+  ;; not focused (bell-urgent, as foot's bell.urgent, unless a program
+  ;; turned that off with CSI ? 1042 l), and run the configured bell
   ;; command, at most every 100 ms
   (define (ring-bell!)
     (let ([cmd (config-ref 'bell-command)] [t (now-ms)] [duration (config-ref 'bell-duration)])
       (when (and (real? duration) (> duration 0))
         (set! bell-start t)
         (set! need-redraw #t))
+      (when (and (not focused) (config-ref 'bell-urgent) (terminal-urgent-on-bell? term))
+        (window-set-urgent! win))
       (when (and cmd (> (- t last-bell) 100))
         (set! last-bell t)
         (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))
