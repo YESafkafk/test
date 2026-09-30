@@ -37,7 +37,7 @@
       (app-id . "chezterm")
       (dynamic-title . #t)
       (decorations . #t)
-      (term . "xterm-256color")
+      (term . #f)                       ; #f: "chezterm" if its terminfo is found
       (env . ())
       (cursor-style . block)            ; block | underline | beam
       (cursor-blink . #f)

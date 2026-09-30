@@ -1,6 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
-        (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard))
+        (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
+        (chezterm termenv))
 
 (define failures 0)
 (define passes 0)
@@ -394,6 +395,25 @@
   (check "binding parse" (cons (fxior MOD-CTRL MOD-SHIFT) (keysym-by-name "c"))
          (parse-key-binding "ctrl+shift+c")))
 
+;;; TERM selection
+(let* ([env (lambda (alist) (lambda (k) (let ([e (assoc k alist)]) (and e (cdr e)))))]
+       [files (lambda (paths) (lambda (p) (and (member p paths) #t)))])
+  (check "term: configured value wins" '(("TERM" . "xterm"))
+         (term-environment "xterm" "/b" (env '()) (files '("/usr/share/terminfo/c/chezterm"))))
+  (check "term: system entry" '(("TERM" . "chezterm"))
+         (term-environment #f "/b" (env '()) (files '("/usr/share/terminfo/c/chezterm"))))
+  (check "term: hashed directory layout" '(("TERM" . "chezterm"))
+         (term-environment #f #f (env '(("HOME" . "/h"))) (files '("/h/.terminfo/63/chezterm"))))
+  (check "term: bundled entry extends TERMINFO_DIRS" '(("TERM" . "chezterm") ("TERMINFO_DIRS" . "/b:"))
+         (term-environment #f "/b" (env '()) (files '("/b/c/chezterm"))))
+  (check "term: bundled entry keeps the user's TERMINFO_DIRS"
+         '(("TERM" . "chezterm") ("TERMINFO_DIRS" . "/b:/x:"))
+         (term-environment #f "/b" (env '(("TERMINFO_DIRS" . "/x:"))) (files '("/b/c/chezterm"))))
+  (check "term: TERMINFO_DIRS entry found" '(("TERM" . "chezterm"))
+         (term-environment #f "/b" (env '(("TERMINFO_DIRS" . "/x"))) (files '("/x/c/chezterm" "/b/c/chezterm"))))
+  (check "term: fallback" '(("TERM" . "xterm-256color"))
+         (term-environment #f "/b" (env '()) (files '()))))
+
 ;;; renderer: incremental rendering (including the scroll optimisation)
 ;;; must produce the same pixels as a full redraw
 (let ()
@@ -402,11 +422,13 @@
     (let* ([n (* (renderer-width r) (renderer-height r))] [bv (make-bytevector (* 4 n))])
       (do ([i 0 (+ i 1)]) ((= i n) bv)
         (bytevector-u32-native-set! bv (* 4 i) (foreign-ref 'unsigned-32 (renderer-pixels r) (* 4 i))))))
-  (define (fresh-render t)
-    (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+  (define (fresh-render t . opts)
+    (let* ([f (if (pair? opts) (car opts) f)]
+           [opacity (if (and (pair? opts) (pair? (cdr opts))) (cadr opts) 1.0)]
+           [r (make-renderer f 3 3 opacity #f #f #x444444 #t)])
       (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
       (renderer-render! r t #t #t (lambda (a) '()) #f)
-      (snapshot r)))
+      (let ([s (snapshot r)]) (renderer-free! r) s)))
   (let ([t (make-term 6 20)]
         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
     (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
@@ -449,7 +471,70 @@
       (check "box drawing drawn" #t (ink? 6)))
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
-    (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t)))))
+    (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; the tile cache: more glyph/color combinations than it holds (8192), so
+  ;; entries are evicted, and earlier screens drawn again after that
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [screen (lambda (n)
+                   (apply string-append
+                          (esc "[H")
+                          (map (lambda (i)
+                                 (let ([c (+ i (* 120 n))])
+                                   (format "~a~c"
+                                           (esc (format "[38;2;~a;~a;~am\x1b;[48;2;~a;~a;~am"
+                                                        (mod c 256) (mod (* 7 n) 256) 200
+                                                        (mod (* 3 c) 256) 40 (mod n 256)))
+                                           (integer->char (+ 33 (mod (+ i n) 94))))))
+                               (iota 119))))]
+         [ok #t])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (do ([n 0 (+ n 1)]) ((= n 80))
+      (feed t (screen n))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (when (and ok (= 0 (mod n 8)))
+        (set! ok (equal? (snapshot r) (fresh-render t)))))
+    (check "tile cache: many colors = fresh" #t ok)
+    (check "tile cache: bounded" #t (<= 8000 (renderer-tile-count r) 8192))
+    (do ([n 0 (+ n 1)]) ((= n 3))
+      (feed t (screen n))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (when ok (set! ok (equal? (snapshot r) (fresh-render t)))))
+    (check "tile cache: evicted entries redrawn = fresh" #t ok)
+    ;; a font change clears the tiles: none of the old size may be used
+    (let ([f2 (make-font "monospace" 14.0 96.0 1 #f #f)])
+      (renderer-set-font! r f2)
+      (check "font change clears the tiles" 0 (renderer-tile-count r))
+      (renderer-resize! r (+ 6 (* 20 (font-cell-width f2))) (+ 6 (* 6 (font-cell-height f2))))
+      (feed t (esc "[0m") "\r\n\x1b;[3mitalic\x1b;[0m 日本 ─┼─ \x1b;[1mbold")
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "render after font change = fresh" #t (equal? (snapshot r) (fresh-render t f2)))
+      (renderer-set-font! r f)
+      (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "render after font change back = fresh" #t (equal? (snapshot r) (fresh-render t))))
+    (renderer-free! r)
+    (check "renderer-free! frees the tiles" 0 (renderer-tile-count r)))
+  ;; opacity < 1: default backgrounds (behind glyphs too) are premultiplied
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 0.8 #f #f #x444444 #t)]
+         [pixel (lambda (x y) (foreign-ref 'unsigned-32 (renderer-pixels r) (* 4 (+ x (* y (renderer-width r))))))]
+         [cw (font-cell-width f)])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "_A\x1b;[44m_B\x1b;[0m\r\nline 2")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "opacity = fresh" #t (equal? (snapshot r) (fresh-render t f 0.8)))
+    (feed t "\r\n\x1b;[31mred \x1b;[7mreverse")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "opacity incremental = fresh" #t (equal? (snapshot r) (fresh-render t f 0.8)))
+    (let ([p (pixel 3 3)])                 ; top left of the "_" cell
+      (check "opacity: default background alpha" 204 (bitwise-arithmetic-shift-right p 24))
+      (check "opacity: premultiplied" #t
+             (for-all (lambda (s) (<= (bitwise-and #xFF (bitwise-arithmetic-shift-right p s)) 204))
+                      '(0 8 16))))
+    (check "opacity: colored background opaque" 255
+           (bitwise-arithmetic-shift-right (pixel (+ 3 (* 2 cw)) 3) 24))
+    (renderer-free! r)))
 
 (printf "~a passed, ~a failed\n" passes failures)
 (exit (if (= failures 0) 0 1))

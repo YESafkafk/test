@@ -8,13 +8,14 @@
   (export make-renderer renderer? renderer-resize! renderer-render!
           renderer-pixels renderer-width renderer-height renderer-stride
           renderer-invalidate! renderer-set-font! renderer-font
-          renderer-cols renderer-rows renderer-set-padding! renderer-free!)
+          renderer-cols renderer-rows renderer-set-padding! renderer-free!
+          renderer-tile-count)
   (import (chezscheme) (chezterm ffi) (chezterm grid) (chezterm terminal) (chezterm font))
 
 ;; The image is composited with pixman: backgrounds are filled in runs,
 ;; glyphs are drawn as a solid color through an a8 mask (or composited
 ;; directly for color glyphs).  pixman images for glyphs and solid colors
-;; are cached.
+;; are cached, and so are cell tiles (see cell-tile).
   (define-record-type renderer
     (fields (mutable font)
             (mutable width) (mutable height) (mutable stride)
@@ -26,9 +27,10 @@
             (mutable last-reverse)
             glyph-images                     ; glyph -> (pixman-image . bits)
             solids                           ; argb -> pixman solid image
-            tiles                            ; glyph -> (fg/bg key -> tile bits)
+            tile-keys tile-bgs tile-vals tile-refs ; the tile table, see cell-tile
             (mutable tile-count)
-            ascii-tiles                      ; direct-mapped: #(fg bg span bits) per cp/style
+            (mutable tile-hand)              ; CLOCK hand for eviction
+            cluster-ids                      ; cluster glyph -> glyph id
             (mutable row-fg) (mutable row-bg)
             opacity                          ; 0-255
             bold-is-bright
@@ -38,8 +40,10 @@
      (lambda (new)
        (lambda (font pad-x pad-y opacity bold-is-bright sel-fg sel-bg hollow)
          (new font 0 0 0 0 0 pad-x pad-y (make-vector 0 #f) #f #f
-              (make-eq-hashtable) (make-eqv-hashtable) (make-eq-hashtable) 0
-              (make-vector 512 #f) (make-fxvector 0) (make-fxvector 0)
+              (make-eq-hashtable) (make-eqv-hashtable)
+              (make-fxvector tile-slots -1) (make-fxvector tile-slots 0)
+              (make-vector tile-slots #f) (make-bytevector tile-slots 0) 0 0
+              (make-eq-hashtable) (make-fxvector 0) (make-fxvector 0)
               (max 0 (min 255 (exact (round (* 255 opacity)))))
               bold-is-bright sel-fg sel-bg hollow)))))
 
@@ -65,13 +69,13 @@
     (hashtable-clear! (renderer-solids r)))
 
   (define (clear-tiles! r)
-    (let-values ([(gs tables) (hashtable-entries (renderer-tiles r))])
-      (vector-for-each
-       (lambda (t) (let-values ([(ks vs) (hashtable-entries t)]) (vector-for-each free vs)))
-       tables))
-    (hashtable-clear! (renderer-tiles r))
-    (vector-fill! (renderer-ascii-tiles r) #f)
-    (renderer-tile-count-set! r 0))
+    (vector-for-each (lambda (v) (when (fixnum? v) (free v))) (renderer-tile-vals r))
+    (vector-fill! (renderer-tile-vals r) #f)
+    (let ([keys (renderer-tile-keys r)])
+      (do ([i 0 (fx+ i 1)]) ((fx= i tile-slots)) (fxvector-set! keys i -1)))
+    (hashtable-clear! (renderer-cluster-ids r))
+    (renderer-tile-count-set! r 0)
+    (renderer-tile-hand-set! r 0))
 
   (define (renderer-set-font! r font)
     ;; the glyph records of the old font are gone with it
@@ -166,59 +170,141 @@
                (hashtable-set! cache g e)
                e))))))
 
-;; Tile for printable ASCII CP in STYLE: a one-entry cache per character
-  ;; avoids the hashtable lookups for the common case of runs of text in
-  ;; the same colors.
-  (define (ascii-tile r cp style fg bg span)
-    (let* ([cache (renderer-ascii-tiles r)]
-           [k (fx+ cp (fx* 128 style))]
-           [e (vector-ref cache k)])
-      (if (and e (fx= (vector-ref e 0) fg) (fx= (vector-ref e 1) bg) (fx= (vector-ref e 2) span))
-          (vector-ref e 3)
-          (let ([g (font-get-glyph (renderer-font r) cp style)])
-            ;; only glyphs inside their cell can be tiles
-            (and (fx>= (glyph-left g) 0) (fx<= (fx+ (glyph-left g) (glyph-width g)) span)
-                 (let ([bits (cell-tile r g fg bg span)])
-                   (vector-set! cache k (vector fg bg span bits))
-                   bits))))))
-
-  ;; A cell tile: glyph G in color FG over background pixel BG, SPAN pixels
-  ;; wide and one cell high, ready to be copied with pixman_blt.  Only used
-  ;; for glyphs that fit horizontally inside their cell.
+  ;;; Cell tiles -------------------------------------------------------------
+  ;;
+  ;; A cell tile is a glyph in color FG over background pixel BG, SPAN pixels
+  ;; wide and one cell high, ready to be copied with pixman_blt.  All tiles
+  ;; live in one hash table with open addressing (linear probing, at most
+  ;; half full), in parallel vectors indexed by slot:
+  ;;   tile-keys  glyph id, style, wide flag and FG packed into a fixnum, or -1
+  ;;              for an empty slot.  The glyph id is the code point, or an
+  ;;              id from cluster-ids for a character with combining marks.
+  ;;   tile-bgs   BG, the premultiplied background pixel
+  ;;   tile-vals  the tile's malloc'd pixels (a fixnum), or the glyph record
+  ;;              when the glyph does not fit its cell: that is remembered
+  ;;              too, so it costs no glyph lookup per frame
+  ;;   tile-refs  1 if the entry was used since the CLOCK hand last passed.
+  ;; A hit needs no glyph lookup.  When the table holds max-tiles entries,
+  ;; CLOCK evicts one entry and frees only its memory.
   (define max-tiles 8192)
+  (define tile-slots (fx* 2 max-tiles))
+  (define slot-mask (fx- tile-slots 1))
+  (define max-clusters 4096)
 
-  (define (cell-tile r g fg bg span)
-    (let* ([per-glyph (or (hashtable-ref (renderer-tiles r) g #f)
-                          (let ([t (make-eqv-hashtable)])
-                            (hashtable-set! (renderer-tiles r) g t)
-                            t))]
-           ;; fg: 24 bits, bg: 32 bits, span flag: 1 bit -> fits a fixnum
-           [key (fxior (fxsll fg 33) (fxsll bg 1) (if (fx> span (font-cell-width (renderer-font r))) 1 0))])
-      (or (hashtable-ref per-glyph key #f)
-          (let* ([font (renderer-font r)]
-                 [ch (font-cell-height font)]
-                 [bits (malloc (fx* 4 (fx* span ch)))]
-                 [img (pixman_image_create_bits PIXMAN_a8r8g8b8 span ch bits (fx* 4 span))]
-                 [x0 (glyph-left g)]
-                 [y0 (fx- (font-baseline font) (glyph-top g))]
-                 [ys (fxmax y0 0)] [ye (fxmin (fx+ y0 (glyph-height g)) ch)])
-            (when (fx>= (renderer-tile-count r) max-tiles) (clear-tiles! r))
-            (pixman_fill bits span 32 0 0 span ch bg)
-            (when (fx< ys ye)
-              (if (glyph-color? g)
-                  (pixman_image_composite32 PIXMAN_OP_OVER (glyph-image r g) 0 img
-                                            0 (fx- ys y0) 0 0 x0 ys (glyph-width g) (fx- ye ys))
-                  (pixman_image_composite32 PIXMAN_OP_OVER (solid r fg) (glyph-image r g) img
-                                            0 0 0 (fx- ys y0) x0 ys (glyph-width g) (fx- ye ys))))
-            (pixman_image_unref img)
-            ;; the table may have been emptied by clear-tiles!
-            (let ([per-glyph (or (hashtable-ref (renderer-tiles r) g #f)
-                                 (let ([t (make-eqv-hashtable)])
-                                   (hashtable-set! (renderer-tiles r) g t)
-                                   t))])
-              (hashtable-set! per-glyph key bits))
-            (renderer-tile-count-set! r (fx+ 1 (renderer-tile-count r)))
-            bits))))
+  (define-syntax tile-key
+    (syntax-rules ()
+      ;; id: 22 bits, style: 2, wide: 1, fg: 24 -> 49 bits
+      [(_ id style wide fg) (fxior (fxsll (fxior (fxsll id 3) (fxsll style 1) wide) 24) fg)]))
+
+  (define-syntax tile-hash
+    (syntax-rules ()
+      [(_ key bg)
+       (let* ([x (fxxor key (fxsll bg 11))]
+              [x (fxand (fxxor x (fxsrl x 25)) #xFFFFFF)])
+         (fxand (fxsrl (fx* x #x9E3779B1) 28) slot-mask))]))
+
+  ;; the slot holding (KEY, BG), or the empty slot where it would go
+  (define (tile-slot r key bg)
+    (let ([keys (renderer-tile-keys r)] [bgs (renderer-tile-bgs r)])
+      (let probe ([i (tile-hash key bg)])
+        (let ([k (fxvector-ref keys i)])
+          (if (or (fx= k -1) (and (fx= k key) (fx= (fxvector-ref bgs i) bg)))
+              i
+              (probe (fxand (fx+ i 1) slot-mask)))))))
+
+  ;; Remove the entry in slot I, moving later entries of its probe run back
+  ;; so that no lookup passes an empty slot before reaching them.
+  (define (remove-tile! r i)
+    (let ([keys (renderer-tile-keys r)] [bgs (renderer-tile-bgs r)]
+          [vals (renderer-tile-vals r)] [refs (renderer-tile-refs r)])
+      (let ([v (vector-ref vals i)]) (when (fixnum? v) (free v)))
+      (let loop ([hole i] [j (fxand (fx+ i 1) slot-mask)])
+        (let ([k (fxvector-ref keys j)])
+          (if (fx= k -1)
+              (begin (fxvector-set! keys hole -1) (vector-set! vals hole #f))
+              (let ([home (tile-hash k (fxvector-ref bgs j))])
+                ;; the entry at j may move to the hole unless its home slot
+                ;; lies cyclically in (hole, j]
+                (if (fx>= (fxand (fx- j home) slot-mask) (fxand (fx- j hole) slot-mask))
+                    (begin
+                      (fxvector-set! keys hole k)
+                      (fxvector-set! bgs hole (fxvector-ref bgs j))
+                      (vector-set! vals hole (vector-ref vals j))
+                      (bytevector-u8-set! refs hole (bytevector-u8-ref refs j))
+                      (loop j (fxand (fx+ j 1) slot-mask)))
+                    (loop hole (fxand (fx+ j 1) slot-mask)))))))
+      (renderer-tile-count-set! r (fx- (renderer-tile-count r) 1))))
+
+  ;; CLOCK: evict the first entry after the hand that was not used since the
+  ;; hand last passed it
+  (define (evict-tile! r)
+    (let ([keys (renderer-tile-keys r)] [refs (renderer-tile-refs r)])
+      (let sweep ([i (renderer-tile-hand r)])
+        (let ([next (fxand (fx+ i 1) slot-mask)])
+          (cond
+            [(fx= (fxvector-ref keys i) -1) (sweep next)]
+            [(fx= 1 (bytevector-u8-ref refs i))
+             (bytevector-u8-set! refs i 0)
+             (sweep next)]
+            [else
+             (renderer-tile-hand-set! r next)
+             (remove-tile! r i)])))))
+
+  ;; glyph id of a cluster glyph (above all code points)
+  (define (cluster-id r g)
+    (let ([ids (renderer-cluster-ids r)])
+      (or (hashtable-ref ids g #f)
+          (begin
+            (when (fx>= (hashtable-size ids) max-clusters) (clear-tiles! r))
+            (let ([id (fx+ #x110000 (hashtable-size ids))])
+              (hashtable-set! ids g id)
+              id)))))
+
+  ;; The tile for code point CP (with combining MARKS, or #f) in STYLE, in
+  ;; color FG over background pixel BG, SPAN pixels wide; or the glyph
+  ;; record when the glyph does not fit inside the cell.
+  (define (cell-tile r cp marks style fg bg span)
+    (let* ([font (renderer-font r)]
+           [g (and marks (font-get-cluster-glyph font cp marks style))]
+           [key (tile-key (if g (cluster-id r g) cp) style
+                          (if (fx> span (font-cell-width font)) 1 0) fg)]
+           [i (tile-slot r key bg)])
+      (if (fx= (fxvector-ref (renderer-tile-keys r) i) key)
+          (begin
+            (bytevector-u8-set! (renderer-tile-refs r) i 1)
+            (vector-ref (renderer-tile-vals r) i))
+          (let* ([g (or g (font-get-glyph font cp style))]
+                 [v (if (and (fx>= (glyph-left g) 0) (fx<= (fx+ (glyph-left g) (glyph-width g)) span))
+                        (make-tile r g fg bg span)
+                        g)])
+            (when (fx>= (renderer-tile-count r) max-tiles) (evict-tile! r))
+            ;; eviction may have moved entries
+            (let ([i (tile-slot r key bg)])
+              (fxvector-set! (renderer-tile-keys r) i key)
+              (fxvector-set! (renderer-tile-bgs r) i bg)
+              (vector-set! (renderer-tile-vals r) i v)
+              (bytevector-u8-set! (renderer-tile-refs r) i 1)
+              (renderer-tile-count-set! r (fx+ (renderer-tile-count r) 1))
+              v)))))
+
+  ;; malloc'd pixels of glyph G in color FG over background pixel BG
+  (define (make-tile r g fg bg span)
+    (let* ([font (renderer-font r)]
+           [ch (font-cell-height font)]
+           [bits (malloc (fx* 4 (fx* span ch)))]
+           [img (pixman_image_create_bits PIXMAN_a8r8g8b8 span ch bits (fx* 4 span))]
+           [x0 (glyph-left g)]
+           [y0 (fx- (font-baseline font) (glyph-top g))]
+           [ys (fxmax y0 0)] [ye (fxmin (fx+ y0 (glyph-height g)) ch)])
+      (pixman_fill bits span 32 0 0 span ch bg)
+      (when (fx< ys ye)
+        (if (glyph-color? g)
+            (pixman_image_composite32 PIXMAN_OP_OVER (glyph-image r g) 0 img
+                                      0 (fx- ys y0) 0 0 x0 ys (glyph-width g) (fx- ye ys))
+            (pixman_image_composite32 PIXMAN_OP_OVER (solid r fg) (glyph-image r g) img
+                                      0 0 0 (fx- ys y0) x0 ys (glyph-width g) (fx- ye ys))))
+      (pixman_image_unref img)
+      bits))
 
   ;; Draw glyph G with pen at (px, baseline-y) in color RGB, clipped to
   ;; rows [clip0, clip1).
@@ -453,19 +539,17 @@
                                    (if (fxlogtest attrs ATTR-ITALIC) STYLE-ITALIC 0))]
                      [marks (and ex (hashtable-ref ex i #f))]
                      [span (if (and (fxlogtest attrs ATTR-WIDE) (fx< (fx+ i 1) ncols)) (fx* 2 cw) cw)]
-                     [bits (and (fx< cp 127) (not marks) (fx<= (fx+ x span) width)
-                                (ascii-tile r cp style fg bg span))])
-                (if bits
-                    (pixman_blt bits pixels span width 32 32 0 0 x y0 span ch)
-                    (let ([g (if marks
-                                 (font-get-cluster-glyph font cp marks style)
-                                 (font-get-glyph font cp style))])
-                      (if (and (fx>= (glyph-left g) 0)
-                               (fx<= (fx+ (glyph-left g) (glyph-width g)) span)
-                               (fx<= (fx+ x span) width))
-                          (pixman_blt (cell-tile r g fg bg span)
-                                      pixels span width 32 32 0 0 x y0 span ch)
-                          (set! overhang (cons (list g x fg) overhang)))))))))
+                     [t (cell-tile r cp marks style fg bg span)])
+                (cond
+                  [(not (fixnum? t)) (set! overhang (cons (list t x fg) overhang))]
+                  [(fx<= (fx+ x span) width)
+                   (pixman_blt t pixels span width 32 32 0 0 x y0 span ch)]
+                  [else                 ; cut off at the right edge
+                   (set! overhang (cons (list (if marks
+                                                  (font-get-cluster-glyph font cp marks style)
+                                                  (font-get-glyph font cp style))
+                                              x fg)
+                                        overhang))])))))
         (for-each (lambda (o) (draw-glyph! r (car o) (cadr o) by (caddr o) y0 y1))
                   (reverse overhang)))
       ;; pass 4: underlines and strikethrough

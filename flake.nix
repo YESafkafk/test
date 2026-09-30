@@ -69,6 +69,7 @@
         ./tests
         ./chezterm.desktop
         ./chezterm.scm.example
+        ./terminfo
       ];
 
       bindingsSource = source [
@@ -77,6 +78,59 @@
         ./tools
         ./protocols
       ];
+
+      benchSource = source [
+        ./bench
+        ./tools
+      ];
+
+      revision = self.shortRev or self.dirtyShortRev or "unknown";
+
+      # The benchmarks against the package: pinned Chez, libraries and font
+      # (DejaVu Sans Mono only, whatever the host has installed).
+      benchRunner =
+        pkgs: chezterm:
+        pkgs.writeShellApplication {
+          name = "chezterm-bench";
+          runtimeInputs = [
+            pkgs.chez
+            pkgs.coreutils
+          ];
+          text = ''
+            export FONTCONFIG_FILE=${fontsConf pkgs}
+            export BENCH_REV=''${BENCH_REV:-${revision}}
+            exec scheme -q --libdirs ${chezterm}/lib/chezterm:${benchSource} \
+              --script ${benchSource}/bench/run.ss "$@"
+          '';
+        };
+
+      benchCompare =
+        pkgs:
+        pkgs.writeShellApplication {
+          name = "chezterm-bench-compare";
+          runtimeInputs = [ pkgs.chez ];
+          text = ''
+            exec scheme -q --libdirs ${benchSource}/tools --script ${benchSource}/bench/compare.ss "$@"
+          '';
+        };
+
+      # bench/ab.sh with the pinned compare tool, e.g.
+      #   nix build github:OWNER/REPO/REV#bench -o old; nix build .#bench -o new
+      #   nix run .#bench-ab -- -- old/bin/chezterm-bench new/bin/chezterm-bench
+      benchAB =
+        pkgs:
+        pkgs.writeShellApplication {
+          name = "chezterm-bench-ab";
+          runtimeInputs = [
+            (benchCompare pkgs)
+            pkgs.coreutils
+            pkgs.util-linux
+          ];
+          text = ''
+            export COMPARE=chezterm-bench-compare
+            exec sh ${benchSource}/bench/ab.sh "$@"
+          '';
+        };
 
       scheme = pkgs: lib.getExe pkgs.chez;
     in
@@ -88,6 +142,11 @@
         in
         {
           default = self.packages.${system}.chezterm;
+
+          # `nix run .#bench -- --out results.json`, see docs/BENCHMARKS.md
+          bench = benchRunner pkgs self.packages.${system}.chezterm;
+          bench-compare = benchCompare pkgs;
+          bench-ab = benchAB pkgs;
 
           chezterm = pkgs.callPackage ./nix/package.nix {
             inherit version;
@@ -158,6 +217,16 @@
           default = self.apps.${system}.chezterm;
           chezterm = app chezterm.meta.description (lib.getExe chezterm);
 
+          bench = app "Run the benchmarks (pinned toolchain and font)" (
+            lib.getExe self.packages.${system}.bench
+          );
+          bench-compare = app "Compare two benchmark result files" (
+            lib.getExe self.packages.${system}.bench-compare
+          );
+          bench-ab = app "Compare two builds with interleaved benchmark runs" (
+            lib.getExe self.packages.${system}.bench-ab
+          );
+
           # The test suite on the working tree.  The committed bindings load
           # libraries by soname, so here they come from LD_LIBRARY_PATH.
           test = app "Run the test suite in the current checkout" (
@@ -198,8 +267,8 @@
           # Package build; its installCheck runs `chezterm --version`.
           chezterm = packages.chezterm;
 
-          # Both passes of `make test`: from source with run-time checks and
-          # against the optimized build.
+          # Both passes of `make test`: from source and against the compiled
+          # build.
           tests = packages.chezterm.overrideAttrs {
             pname = "chezterm-tests";
             doCheck = true;
@@ -230,6 +299,23 @@
                   ${./src/chezterm/ffi.ss} relinked.ss ${packages.chezterm.sharedObjects}
                 diff -u ${packages.bindings}/ffi-linked.ss relinked.ss
                 touch $out
+              '';
+
+          # The benchmarks run (--quick, so as a smoke test, not for timing)
+          # and produce result files the compare tool reads.
+          bench =
+            pkgs.runCommand "chezterm-check-bench"
+              {
+                nativeBuildInputs = [
+                  packages.bench
+                  packages.bench-compare
+                ];
+              }
+              ''
+                export HOME=$TMPDIR XDG_CACHE_HOME=$TMPDIR/cache
+                mkdir -p $out
+                chezterm-bench --quick --out $out/results.json
+                chezterm-bench-compare $out/results.json $out/results.json
               '';
 
           formatting =

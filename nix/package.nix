@@ -7,6 +7,8 @@
   freetype,
   fontconfig,
   pixman,
+  # tic compiles the terminfo entry; tput runs in the terminfo tests.
+  ncurses,
   # Ctrl+click on a URL runs xdg-open.  Appended to PATH, so a system-wide
   # xdg-open wins; override with null to leave it out.
   xdg-utils,
@@ -37,7 +39,10 @@ stdenv.mkDerivation {
   pname = "chezterm";
   inherit version src;
 
-  nativeBuildInputs = [ chez ];
+  nativeBuildInputs = [
+    chez
+    ncurses
+  ];
 
   postPatch = ''
     make relink SCHEME=${scheme} SHARED_OBJECTS="${sharedObjects}"
@@ -45,6 +50,7 @@ stdenv.mkDerivation {
 
   makeFlags = [
     "SCHEME=${scheme}"
+    "TIC=${lib.getBin ncurses}/bin/tic"
     "PREFIX=${placeholder "out"}"
   ]
   ++ lib.optional (xdg-utils != null) "RUNTIME_PATH=${lib.makeBinPath [ xdg-utils ]}";
@@ -64,6 +70,7 @@ stdenv.mkDerivation {
   installCheckPhase = ''
     runHook preInstallCheck
     $out/bin/chezterm --version | grep -Fx "chezterm ${version}"
+    TERMINFO=$out/share/terminfo ${lib.getBin ncurses}/bin/infocmp -x chezterm-direct >/dev/null
     runHook postInstallCheck
   '';
 
