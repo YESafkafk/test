@@ -14,7 +14,8 @@
 ;;;   pointer-enter x y / pointer-leave / pointer-motion x y
 ;;;   pointer-button button pressed?
 ;;;   scroll axis amount discrete?   (axis 0 vertical, 1 horizontal)
-;;;   paste which text            clipboard data arrived
+;;;   paste which text tag        clipboard data arrived (TEXT #f: there is
+;;;                               none), for a request with TAG
 ;;;   frame                       the compositor is ready for a new frame
 (library (chezterm window)
   (export open-window window? window-display-fd window-flush! window-dispatch!
@@ -58,7 +59,7 @@
             (mutable offer-mimes)        ; offer proxy -> list of mime types
             (mutable clipboard-source) (mutable primary-source)
             (mutable clipboard-text) (mutable primary-text)
-            (mutable reads)              ; list of #(fd which bytes)
+            (mutable reads)              ; list of #(fd which bytes tag)
             app-id title))
 
   (define (global w name) (let ([e (assoc name (window-globals w))]) (and e (cdr e))))
@@ -540,29 +541,40 @@
               (window-clipboard-text-set! w text)
               (wl_data_device_set_selection (window-data-device w) src (window-serial w)))))))
 
-  ;; Request the selection's text; it arrives later as a (paste which text) event.
-  (define (window-request-paste! w which)
-    (cond
-      [(window-owns-selection? w which)
-       (emit w 'paste which (if (eq? which 'primary) (window-primary-text w) (window-clipboard-text w)))]
-      [else
-       (let ([offer (if (eq? which 'primary) (window-primary-offer w) (window-clipboard-offer w))])
-         (when offer
-           (let* ([mimes (hashtable-ref (window-offer-mimes w) offer '())]
-                  [mime (find (lambda (m) (member m mimes)) text-mimes)])
-             (when mime
-               (let ([fds (malloc 8)])
-                 (when (= 0 (pipe2 fds O_CLOEXEC))
-                   (let ([rfd (foreign-ref 'int fds 0)] [wfd (foreign-ref 'int fds 4)])
-                     (if (eq? which 'primary)
-                         (zwp_primary_selection_offer_v1_receive offer mime wfd)
-                         (wl_data_offer_receive offer mime wfd))
-                     (close wfd)
-                     (fcntl rfd F_SETFL O_NONBLOCK)
-                     (window-reads-set! w (cons (vector rfd which (call-with-values open-bytevector-output-port cons))
-                                                (window-reads w)))
-                     (wl_display_flush (window-display w))))
-                 (free fds))))))]))
+  ;; Request the selection's text; it arrives later as a (paste which text
+  ;; tag) event, with TAG (#f by default) telling requests apart.  TEXT is
+  ;; #f when there is no text to paste.
+  (define window-request-paste!
+    (case-lambda
+      [(w which) (window-request-paste! w which #f)]
+      [(w which tag)
+       (cond
+         [(window-owns-selection? w which)
+          (emit w 'paste which (if (eq? which 'primary) (window-primary-text w) (window-clipboard-text w)) tag)]
+         [(let ([offer (if (eq? which 'primary) (window-primary-offer w) (window-clipboard-offer w))])
+            (and offer
+                 (let* ([mimes (hashtable-ref (window-offer-mimes w) offer '())]
+                        [mime (find (lambda (m) (member m mimes)) text-mimes)])
+                   (and mime (receive-offer! w which offer mime tag)))))
+          (void)]
+         [else (emit w 'paste which #f tag)])]))
+
+  ;; Start reading OFFER's text as MIME; #f when no pipe could be made.
+  (define (receive-offer! w which offer mime tag)
+    (let* ([fds (malloc 8)]
+           [ok (= 0 (pipe2 fds O_CLOEXEC))])
+      (when ok
+        (let ([rfd (foreign-ref 'int fds 0)] [wfd (foreign-ref 'int fds 4)])
+          (if (eq? which 'primary)
+              (zwp_primary_selection_offer_v1_receive offer mime wfd)
+              (wl_data_offer_receive offer mime wfd))
+          (close wfd)
+          (fcntl rfd F_SETFL O_NONBLOCK)
+          (window-reads-set! w (cons (vector rfd which (call-with-values open-bytevector-output-port cons) tag)
+                                     (window-reads w)))
+          (wl_display_flush (window-display w))))
+      (free fds)
+      ok))
 
   (define (window-poll-fds w) (map (lambda (r) (vector-ref r 0)) (window-reads w)))
 
@@ -582,5 +594,5 @@
                ;; EOF or error: done
                (close fd)
                (window-reads-set! w (remq r (window-reads w)))
-               (emit w 'paste (vector-ref r 1) (utf8->string ((cdr (vector-ref r 2)))))]))))))
+               (emit w 'paste (vector-ref r 1) (utf8->string ((cdr (vector-ref r 2)))) (vector-ref r 3))]))))))
   )

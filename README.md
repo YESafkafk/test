@@ -25,7 +25,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 8 hyperlinks, OSC 52 clipboard (write only), OSC 133 shell integration marks
+    OSC 8 hyperlinks, OSC 52 clipboard (reading only with `clipboard-read`),
+    OSC 133 shell integration marks
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
 - **Scrollback** (configurable size), which stays in place while new output
@@ -216,6 +217,18 @@ and so send nothing by default, the way kitty does even while a program has
 not asked for the protocol: media keys, Print, Pause, Scroll Lock and
 F21–F35 as `CSI u` (e.g. `CSI 57428 u` for Play), and Menu as `CSI 29 ~`.
 Every other key is encoded exactly as before.
+
+### Clipboard access (OSC 52)
+
+Programs can always set the clipboard with OSC 52. Reading it (`OSC 52 ;
+c ; ? ST`) is off by default, because anything running in the terminal,
+also on a remote host, could then read what was copied elsewhere.
+`(clipboard-read allow)` answers queries with the clipboard's text, base64
+encoded, read like a paste; `p` and `s` ask for the primary selection, as
+in foot and Alacritty. The reply ends with the query's terminator (BEL or
+ST), as in foot and Alacritty. With `deny` (the default), or when there is
+no text, the reply is empty (`OSC 52 ; c ; ST`), as kitty answers a read it
+does not allow, so that programs do not wait for a reply that never comes.
 
 ### Keyboard hints
 

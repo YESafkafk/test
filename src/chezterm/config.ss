@@ -52,6 +52,7 @@
       (word-separators . ",│`|:\"' ()[]{}<>\t")
       (bell-command . #f)               ; e.g. ("paplay" "/usr/share/sounds/bell.oga")
       (open-command . ("xdg-open"))     ; opens links and URLs; the URI is appended
+      (clipboard-read . deny)           ; OSC 52 clipboard queries: allow | deny
       (hint-alphabet . "jfkdls;ahgurieowpq") ; characters of the keyboard hint labels
       (colors
        . ((foreground . "#d8d8d8")

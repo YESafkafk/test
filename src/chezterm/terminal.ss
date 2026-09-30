@@ -26,6 +26,7 @@
           terminal-set-cell-pixel-size! terminal-set-defaults!
           terminal-keyboard-flags terminal-set-kitty-keyboard!
           terminal-link-uri terminal-link-count
+          terminal-set-clipboard-read-handler! osc52-reply
           color->rgb make-default-palette)
   (import (chezscheme) (chezterm grid) (chezterm charwidth))
 
@@ -107,7 +108,9 @@
      (mutable pen-extra)
      ;; underline color (SGR 58), #f for the foreground, and what it adds to
      ;; the foreground field of printed cells (see ul-field)
-     (mutable ul-color) (mutable ul-bits))
+     (mutable ul-color) (mutable ul-bits)
+     ;; called for an OSC 52 query, see osc-clipboard!
+     (mutable on-clipboard-read))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -136,7 +139,8 @@
                        #f
                        #t '() '()
                        (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
-                       #f #f 0)])
+                       #f #f 0
+                       (lambda (letter which term) (void)))])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -150,6 +154,12 @@
     (terminal-on-title-set! t on-title)
     (terminal-on-bell-set! t on-bell)
     (terminal-on-clipboard-set! t on-clipboard))
+
+  ;; HANDLER is called as (HANDLER letter which terminator) when a program
+  ;; asks for the clipboard with OSC 52; see osc-clipboard!.  Without one,
+  ;; queries get no reply.
+  (define (terminal-set-clipboard-read-handler! t handler)
+    (terminal-on-clipboard-read-set! t handler))
 
   ;; Apply new defaults from a configuration reload: palette and cursor.
   ;; Colors changed by the application (OSC 4/10/11/12) are reset.
@@ -1262,12 +1272,50 @@
                (terminal-cwd-set! t (percent-decode (substring p slash (string-length p)))))))]
         [(8) (osc-hyperlink! t rest)]
         [(133) (shell-mark! t rest)]
-        [(52)
-         (let ([parts (string-split rest #\;)])
-           (when (and (fx= 2 (length parts)) (not (string=? (cadr parts) "?")))
-             (let ([data (base64-decode (cadr parts))])
-               (when data ((terminal-on-clipboard t) (utf8->string data))))))]
+        [(52) (osc-clipboard! t rest term)]
         [else (void)])))
+
+  ;;; OSC 52 clipboard ------------------------------------------------------
+  ;;; OSC 52 ; selections ; base64 ST sets the clipboard.  With ? instead of
+  ;;; the data it asks for it: the first of the selection characters that
+  ;;; is c (the clipboard), p or s (the primary selection, as foot and
+  ;;; Alacritty take them) is passed to the clipboard read handler, with
+  ;;; which of the two it means and the query's terminator, so that the
+  ;;; reply (see osc52-reply) can end the same way, as in foot and
+  ;;; Alacritty.  No selection characters mean c; a query for cut buffers
+  ;;; only (0-7) is ignored.
+
+  (define (osc-clipboard! t rest term)
+    (let ([parts (string-split rest #\;)])
+      (when (fx= 2 (length parts))
+        (if (string=? (cadr parts) "?")
+            (let* ([sel (car parts)]
+                   [letter (if (string=? sel "")
+                               #\c
+                               (find (lambda (c) (memv c '(#\c #\p #\s))) (string->list sel)))])
+              (when letter
+                ((terminal-on-clipboard-read t) letter (if (char=? letter #\c) 'clipboard 'primary) term)))
+            (let ([data (base64-decode (cadr parts))])
+              (when data ((terminal-on-clipboard t) (utf8->string data))))))))
+
+  ;; The reply to an OSC 52 query for selection LETTER: TEXT, base64
+  ;; encoded, and TERM, the query's terminator.
+  (define (osc52-reply letter text term)
+    (string-append "\x1b;]52;" (string letter) ";" (base64-encode (string->utf8 text)) term))
+
+  (define (base64-encode bv)
+    (let ([chars "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"]
+          [n (bytevector-length bv)]
+          [out (open-output-string)])
+      (let loop ([i 0])
+        (when (fx< i n)
+          (let* ([k (fxmin 3 (fx- n i))]
+                 [b (lambda (j) (if (fx< j k) (bytevector-u8-ref bv (fx+ i j)) 0))]
+                 [v (fxior (fxsll (b 0) 16) (fxsll (b 1) 8) (b 2))])
+            (do ([j 0 (fx+ j 1)]) ((fx= j 4))
+              (write-char (if (fx<= j k) (string-ref chars (fxand 63 (fxsrl v (fx- 18 (fx* 6 j))))) #\=) out))
+            (loop (fx+ i 3)))))
+      (get-output-string out)))
 
   ;;; OSC 133 shell integration ----------------------------------------------
   ;;; OSC 133 ; A|C|D [; options] ST marks the line the cursor is on (see

@@ -634,6 +634,19 @@
         (set! last-bell t)
         (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))
 
+  ;; OSC 52 query for selection LETTER, meaning WHICH ('clipboard or
+  ;; 'primary).  With (clipboard-read allow) the text is read like a paste
+  ;; and sent back base64 encoded; otherwise, and when there is no text,
+  ;; the reply is empty, as kitty answers a denied read, so that programs
+  ;; need not wait for a reply that never comes.
+  (define (clipboard-read! letter which terminator)
+    (case (config-ref 'clipboard-read)
+      [(allow) (window-request-paste! win which (list 'osc52 letter terminator))]
+      [(deny) (send! (osc52-reply letter "" terminator))]
+      [else
+       (warn "invalid clipboard-read ~s: allow or deny" (config-ref 'clipboard-read))
+       (send! (osc52-reply letter "" terminator))]))
+
   (define (spawn-new-instance!)
     (let ([exe (or (getenv "CHEZTERM_EXE") "chezterm")]
           [cwd (or (terminal-cwd term) (and child-pid (process-cwd child-pid)))])
@@ -890,7 +903,11 @@
       [(pointer-motion) (pointer-motion! (car args) (cadr args))]
       [(pointer-button) (pointer-button! (car args) (cadr args))]
       [(scroll) (when (= (car args) 0) (scroll! (cadr args) (caddr args)))]
-      [(paste) (when (cadr args) (paste-text! (cadr args)))]
+      [(paste)
+       (let ([text (cadr args)] [tag (caddr args)])
+         (if (and (pair? tag) (eq? (car tag) 'osc52))
+             (send! (osc52-reply (cadr tag) (or text "") (caddr tag)))
+             (when text (paste-text! text))))]
       [(frame) (void)]
       [else (void)]))
 
@@ -1101,6 +1118,7 @@ Options:
           (lambda (title) (when (config-ref 'dynamic-title) (window-set-title! win title)))
           ring-bell!
           (lambda (text) (window-set-clipboard! win 'clipboard text)))
+        (terminal-set-clipboard-read-handler! term clipboard-read!)
         (let ([program (or (opt 'command)
                            (let ([sh (config-ref 'shell)])
                              (if sh

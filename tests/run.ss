@@ -352,6 +352,32 @@
   (terminal-resize! t 3 3)
   (check "reflow wide" '("ab" "日" "本") (screen t)))
 
+;;; OSC 52: writes go to the clipboard, queries to the read handler with
+;;; the selection they ask for and their terminator
+(let* ([t (make-term 3 10)] [writes '()] [reads '()])
+  (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (void)) (lambda () (void))
+                           (lambda (s) (set! writes (cons s writes))))
+  (feed t (esc "]52;c;aMOpbGxv") "\x7;" (esc "]52;;?") "\x7;")
+  (check "OSC 52 query without a handler is ignored" '("héllo") writes)
+  (terminal-set-clipboard-read-handler! t (lambda (letter which term) (set! reads (cons (list letter which term) reads))))
+  (feed t (esc "]52;c;?") "\x7;" (esc "]52;;?") (esc "\\") (esc "]52;p;?") "\x7;" (esc "]52;s;?") "\x7;"
+        (esc "]52;s0;?") "\x7;" (esc "]52;0;?") "\x7;" (esc "]52;c;?;x") "\x7;")
+  (check "OSC 52 queries"
+         '((#\c clipboard "\x7;") (#\c clipboard "\x1b;\\") (#\p primary "\x7;") (#\s primary "\x7;")
+           (#\s primary "\x7;"))
+         (reverse reads))
+  (check "OSC 52 query is not a write" '("héllo") writes))
+(check "OSC 52 reply" "\x1b;]52;c;aMOpbGxv\x7;" (osc52-reply #\c "héllo" "\x7;"))
+(check "OSC 52 reply: base64 padding" '("\x1b;]52;p;\x1b;\\" "\x1b;]52;s;YQ==\x7;" "\x1b;]52;c;YWI=\x7;" "\x1b;]52;c;YWJj\x7;")
+       (list (osc52-reply #\p "" "\x1b;\\") (osc52-reply #\s "a" "\x7;") (osc52-reply #\c "ab" "\x7;")
+             (osc52-reply #\c "abc" "\x7;")))
+(let ([t (make-term 3 10)] [writes '()] [text (list->string (map (lambda (i) (integer->char (+ 32 i))) (iota 300)))])
+  (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (void)) (lambda () (void))
+                           (lambda (s) (set! writes (cons s writes))))
+  (let ([r (osc52-reply #\c text "\x7;")])
+    (feed t (esc "]52;c;" (substring r 7 (string-length r))))
+    (check "OSC 52 reply decodes to the text" (list text) writes)))
+
 ;;; OSC 133 shell integration: marks on the cursor's line, kept through
 ;;; the history and reflow
 (define (osc133 x) (esc "]133;" x "\x1b;\\"))

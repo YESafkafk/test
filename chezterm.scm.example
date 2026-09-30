@@ -52,6 +52,9 @@
 (scroll-multiplier 3)            ; lines per wheel step
 (alternate-scroll #t)            ; wheel sends arrow keys in full-screen apps
 (copy-on-select #t)              ; selections go to the primary selection
+(clipboard-read deny)            ; allow: programs may read the clipboard and
+                                 ; primary selection with OSC 52 ; c|p ; ?
+                                 ; deny: they get an empty reply
 (word-separators ",│`|:\"' ()[]{}<>\t")
 
 ;;; Links & keyboard hints ---------------------------------------------------
