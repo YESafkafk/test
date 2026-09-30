@@ -39,8 +39,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - **Ctrl+click on links and URLs** opens them with `xdg-open`: OSC 8
   hyperlinks first, then URLs found in the text. Only `http`, `https`,
   `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
-  from the program. Holding Ctrl over a link underlines all of it, also
-  where it continues on another row.
+  from the program. Holding Ctrl over a link or a URL underlines all of it,
+  also where it continues on another row, and shows a hand.
 - **Keyboard hints**, as in Alacritty: Ctrl+Shift+O labels every link and
   URL on screen (also scrolled back) with a short key sequence, and typing
   one opens it; Ctrl+Shift+Y copies it instead, and `hint-select` selects

@@ -9,7 +9,8 @@ would go in the code.
 
 Cells keep a link id in the line's `extra` table, and the terminal maps ids
 to URIs. Ctrl+click opens explicit links before URLs found in the text, and
-hovering with Ctrl underlines the whole link. Keyboard hints (below) label
+hovering with Ctrl underlines the whole link, or the whole URL found in
+the text. Keyboard hints (below) label
 explicit links as well.
 
 ### Underline color (SGR 58/59) (done)

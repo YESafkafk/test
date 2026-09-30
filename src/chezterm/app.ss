@@ -70,6 +70,7 @@
   (define smooth-scroll-acc 0.0)
   (define pointer-inside #f)
   (define hover-link 0)           ; the OSC 8 link under the pointer while Ctrl is held
+  (define hover-url #f)           ; or the URL found in the text there (a target)
 
   ;; search
   (define search-active #f)
@@ -397,13 +398,17 @@
   ;;; Search -------------------------------------------------------------------------------
 
   ;; What the renderer highlights in absolute row ABS: search matches, the
-  ;; hovered link and hint labels.
+  ;; hovered link or URL and hint labels.
   (define (highlights abs)
     (let* ([s (search-highlights abs)]
            [s (if (= hover-link 0)
                   s
                   (append s (map (lambda (r) (list (car r) (cadr r) 'link))
-                                 (link-ranges term hover-link abs))))])
+                                 (link-ranges term hover-link abs))))]
+           [s (if hover-url
+                  (append s (map (lambda (r) (list (car r) (cadr r) 'link))
+                                 (target-ranges hover-url abs (terminal-cols term))))
+                  s)])
       (if hint-cells
           (append s (hashtable-ref hint-cells abs '()))
           s)))
@@ -731,20 +736,31 @@
            (when (config-ref 'copy-on-select) (copy-selection! 'primary)))]
         [else (void)])))
 
-  ;; Hovering an OSC 8 link with Ctrl held underlines all of it (on screen)
-  ;; and shows a hand when a click would open it.
+  ;; Hovering an OSC 8 link or a URL in the text with Ctrl held underlines
+  ;; all of it (on screen), also where it wraps, and shows a hand when a
+  ;; click would open it.  As with url-at, a link comes first.
   (define (update-hover!)
-    (let ([id (if (and pointer-inside (not (mouse-reporting?))
-                       (logtest (keyboard-mods (window-keyboard win)) MOD-CTRL))
-                  (let* ([id (link-id-at term (point->cell mouse-x mouse-y))]
-                         [uri (terminal-link-uri term id)])
-                    (if (and uri (openable-url? uri)) id 0))
-                  0)])
-      (unless (= id hover-link)
+    (let-values ([(id url)
+                  (if (and pointer-inside (not (mouse-reporting?))
+                           (logtest (keyboard-mods (window-keyboard win)) MOD-CTRL))
+                      (let* ([pt (point->cell mouse-x mouse-y)]
+                             [id (link-id-at term pt)]
+                             [uri (terminal-link-uri term id)])
+                        (if uri
+                            (values (if (openable-url? uri) id 0) #f)
+                            (let ([t (text-url-target-at term pt)])
+                              (values 0 (and t (openable-url? (target-uri t)) t)))))
+                      (values 0 #f))])
+      (unless (and (= id hover-link) (equal? (target-key url) (target-key hover-url)))
         (set! hover-link id)
+        (set! hover-url url)
         (set! need-redraw #t))
       (when pointer-inside
-        (window-set-cursor! win (cond [(mouse-reporting?) 'default] [(> id 0) 'pointer] [else 'text])))))
+        (window-set-cursor! win (cond [(mouse-reporting?) 'default]
+                                      [(or (> id 0) url) 'pointer]
+                                      [else 'text])))))
+
+  (define (target-key t) (and t (list (target-uri t) (target-start t) (target-end t))))
 
   (define (pointer-motion! x y)
     (set! mouse-x x)
