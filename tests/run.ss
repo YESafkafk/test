@@ -692,6 +692,114 @@
   (check "xkb: Up release" "\x1b;[1;1:3A" (enc 2 (release UP)))
   (check "xkb: Up repeat" "\x1b;[1;1:2A" (enc 2 (key-event-with-type (press UP) KEY-REPEAT))))
 
+;;; Hyper and Meta: which real modifier each modifier class maps to is
+;;; found by pressing the keymap's keys (see modifier-mapping)
+(let ()
+  ;; a keymap whose modifier keys set modifiers, with Hyper and Meta on the
+  ;; real modifiers given, and optionally a second Alt key on another one
+  (define (keymap hyper meta alt-r)
+    (format "xkb_keymap {
+  xkb_keycodes { minimum = 8; maximum = 255;
+    <LFSH> = 50; <LCTL> = 37; <LALT> = 64; <LWIN> = 133; <CAPS> = 66; <NMLK> = 77;
+    <AC01> = 38; <HYPR> = 207; <META> = 205; <RALT> = 108; };
+  xkb_types {
+    type \"ONE_LEVEL\" { modifiers = none; level_name[Level1] = \"Any\"; };
+    type \"ALPHABETIC\" { modifiers = Shift+Lock; map[Shift] = Level2; map[Lock] = Level2;
+      level_name[Level1] = \"Base\"; level_name[Level2] = \"Caps\"; };
+  };
+  xkb_compat {
+    interpret Caps_Lock { action = LockMods(modifiers = modMapMods); };
+    interpret Num_Lock { action = LockMods(modifiers = modMapMods); };
+    interpret Any + AnyOf(all) { action = SetMods(modifiers = modMapMods); };
+  };
+  xkb_symbols {
+    key <LFSH> { [ Shift_L ] }; key <LCTL> { [ Control_L ] }; key <LALT> { [ Alt_L ] };
+    key <RALT> { [ Alt_R ] }; key <LWIN> { [ Super_L ] }; key <CAPS> { [ Caps_Lock ] };
+    key <NMLK> { [ Num_Lock ] }; key <HYPR> { [ Hyper_L ] }; key <META> { [ Meta_L ] };
+    key <AC01> { type = \"ALPHABETIC\", [ a, A ] };
+    modifier_map Shift { <LFSH> }; modifier_map Lock { <CAPS> };
+    modifier_map Control { <LCTL> }; modifier_map Mod1 { <LALT> };
+    modifier_map ~a { <RALT> }; modifier_map Mod2 { <NMLK> }; modifier_map Mod4 { <LWIN> };
+    modifier_map ~a { <HYPR> }; modifier_map ~a { <META> };
+  };
+};" alt-r hyper meta))
+  ;; evdev keycodes, and xkb's real modifier masks
+  (define LSHIFT 42) (define LCTL 29) (define LALT 56) (define LWIN 125) (define CAPS 58)
+  (define NUMLOCK 69) (define KA 30) (define HYPER 199) (define META 197)
+  (define shift 1) (define lock 2) (define control 4) (define mod1 8) (define mod2 16)
+  (define mod3 32) (define mod4 64) (define mod5 128)
+  (define (sym name) (xkb_keysym_from_name name 0))
+  (define (keyboard-with km)
+    (let ([kb (make-keyboard)]) (keyboard-set-keymap-string! kb km) kb))
+  (define (mods kb depressed . locked)
+    (keyboard-update-modifiers! kb depressed 0 (if (pair? locked) (car locked) 0) 0)
+    (list (keyboard-mods kb) (keyboard-locks kb)))
+  (define (press kb key) (keyboard-translate kb key KEY-PRESS))
+  (define (release kb key) (keyboard-translate kb key KEY-RELEASE))
+  (define (enc flags ev) (encode-key ev #f #f #f flags))
+
+  ;; the usual layout: Hyper shares Mod4 with Super, Meta shares Mod1 with Alt
+  (let ([kb (keyboard-with (keymap "Mod4" "Mod1" "Mod1"))])
+    (check "mods: shift" (list MOD-SHIFT 0) (mods kb shift))
+    (check "mods: ctrl" (list MOD-CTRL 0) (mods kb control))
+    (check "mods: Mod1 is Alt only" (list MOD-ALT 0) (mods kb mod1))
+    (check "mods: Mod4 is Super only" (list MOD-SUPER 0) (mods kb mod4))
+    (check "mods: locks" (list 0 (logior MOD-CAPS-LOCK MOD-NUM-LOCK)) (mods kb 0 (logior lock mod2)))
+    (check "mods: Mod3 and Mod5 are nothing" (list 0 0) (mods kb (logior mod3 mod5)))
+    (mods kb 0)
+    (check "mods: Hyper_L on Super's modifier sets Super"
+           (list MOD-SUPER (sym "Hyper_L")) (let ([e (press kb HYPER)]) (list (key-event-mods e) (key-event-key e))))
+    (check "mods: Hyper_L, all keys" "\x1b;[57445;9u" (begin (release kb HYPER) (enc 8 (press kb HYPER))))
+    (release kb HYPER)
+    (check "mods: Meta_L on Alt's modifier sets Alt" "\x1b;[57446;3u" (enc 8 (press kb META)))
+    (release kb META)
+    (check "mods: Super_L" "\x1b;[57444;9u" (enc 8 (press kb LWIN))))
+
+  ;; Hyper on Mod3 and Meta on Mod5, modifiers of their own
+  (let ([kb (keyboard-with (keymap "Mod3" "Mod5" "Mod1"))])
+    (check "mods: Mod3 is Hyper" (list MOD-HYPER 0) (mods kb mod3))
+    (check "mods: Mod5 is Meta" (list MOD-META 0) (mods kb mod5))
+    (check "mods: Mod4 is still Super" (list MOD-SUPER 0) (mods kb mod4))
+    (check "mods: Hyper+Super+Ctrl" (list (logior MOD-HYPER MOD-SUPER MOD-CTRL) 0)
+           (mods kb (logior mod3 mod4 control)))
+    (mods kb mod3)
+    (let ([e (press kb KA)])
+      (check "mods: hyper+a" (list "a" MOD-HYPER) (list (key-event-text e) (key-event-mods e)))
+      (check "mods: hyper+a, disambiguated" "\x1b;[97;17u" (enc 1 e))
+      (check "mods: hyper+a, legacy ignores Hyper" "a" (enc 0 e))
+      (check "mods: hyper+a, bindings ignore Hyper" 0 (key-event-legacy-mods e)))
+    (mods kb (logior mod5 control))
+    (let ([e (press kb KA)])
+      (check "mods: ctrl+meta+a, disambiguated" "\x1b;[97;37u" (enc 1 e))
+      (check "mods: ctrl+meta+a, legacy" "\x1;" (enc 0 e))
+      (check "mods: ctrl+meta+a, bindings see Ctrl" MOD-CTRL (key-event-legacy-mods e)))
+    (mods kb 0)
+    (check "mods: Hyper_L press" "\x1b;[57445;17u" (enc 8 (press kb HYPER)))
+    (mods kb mod3)
+    (check "mods: Hyper_L release" "\x1b;[57445;1:3u" (enc 10 (release kb HYPER)))
+    (mods kb 0)
+    (check "mods: Meta_L press" "\x1b;[57446;33u" (enc 8 (press kb META)))
+    (mods kb mod5)
+    (check "mods: Meta_L release" "\x1b;[57446;1:3u" (enc 10 (release kb META)))
+    (mods kb 0)
+    (check "mods: Hyper_L, legacy" #f (enc 0 (press kb HYPER)))
+    (release kb HYPER)
+    ;; leaving the window forgets modifiers and held modifier keys
+    (mods kb (logior mod3 control) lock)
+    (press kb LCTL)
+    (keyboard-reset-modifiers! kb)
+    (check "mods: reset" (list 0 0) (list (keyboard-mods kb) (keyboard-locks kb)))
+    (check "mods: a after reset" 0 (key-event-mods (press kb KA))))
+
+  ;; two Alt keys on different modifiers: no reliable mapping, so modifiers
+  ;; are taken by name and Hyper and Meta are not reported
+  (let ([kb (keyboard-with (keymap "Mod3" "Mod5" "Mod3"))])
+    (check "mods: fallback: Mod1 is Alt" (list MOD-ALT 0) (mods kb mod1))
+    (check "mods: fallback: Mod3 is nothing" (list 0 0) (mods kb mod3))
+    (check "mods: fallback: Mod4 is Super" (list MOD-SUPER 0) (mods kb mod4))
+    (mods kb 0)
+    (check "mods: fallback: Hyper_L sets nothing" "\x1b;[57445u" (enc 8 (press kb HYPER)))))
+
 ;;; kitty keyboard protocol: encoding
 (let ()
   ;; (kev keysym-name text mods option value ...), options: key (keysym name

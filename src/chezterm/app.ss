@@ -521,8 +521,9 @@
           [cwd (or (terminal-cwd term) (and child-pid (process-cwd child-pid)))])
       (spawn-detached (list exe) cwd)))
 
+  ;; Bindings match Shift, Alt, Ctrl and Super only.
   (define (find-binding ev)
-    (let* ([mods (key-event-mods ev)]
+    (let* ([mods (key-event-legacy-mods ev)]
            [sym (keysym-lower (key-event-sym ev))]
            [b (find (lambda (b) (and (= (caar b) mods) (= (cdar b) sym))) bindings)])
       (and b (cdr b))))
