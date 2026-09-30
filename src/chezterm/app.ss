@@ -48,10 +48,9 @@
   (define repeat-key #f)          ; evdev keycode
   (define repeat-event #f)
   (define repeat-next 0)
-  ;; evdev keycodes of held keys whose press chezterm kept to itself (a key
-  ;; binding, the search prompt, a compose sequence): their releases are not
-  ;; reported to the application either
-  (define consumed-keys '())
+  ;; evdev keycodes of held keys whose press was reported to the program:
+  ;; only their releases are (see reported-after-press)
+  (define reported-keys '())
 
   ;; visual bell
   (define bell-start #f)          ; when the flash started, while it lasts
@@ -707,9 +706,9 @@
         (send! bytes))))
 
   (define (key-release! key ev)
-    (if (memv key consumed-keys)
-        (set! consumed-keys (remv key consumed-keys))
-        (when ev (send-key! ev))))
+    (let-values ([(keys report?) (reported-after-release reported-keys key)])
+      (set! reported-keys keys)
+      (when (and report? ev) (send-key! ev))))
 
   ;;; Mouse --------------------------------------------------------------------------------
 
@@ -904,26 +903,23 @@
            (set-font! font-size s)))]
       [(focus)
        ;; Keys held while the focus leaves get no release, as in kitty and
-       ;; foot.  A consumed key keeps its release to itself when it is still
-       ;; held after the focus came back; keys released meanwhile are dropped.
+       ;; foot, and neither do keys pressed while it is away, as in kitty
        (set! focused (car args))
-       (if focused
-           (set! consumed-keys (filter (lambda (k) (memv k (cadr args))) consumed-keys))
-           (set! repeat-key #f))
+       (set! reported-keys '())
+       (unless focused (set! repeat-key #f))
        (update-hover!)
        (when (terminal-focus-events? term) (send! (if focused "\x1b;[I" "\x1b;[O")))
        (set! need-redraw #t)]
       [(key-press)
        (let ([ev (car args)] [key (cadr args)])
-         (set! consumed-keys (remv key consumed-keys))
          (cond
-           [(not ev) (set! consumed-keys (cons key consumed-keys))]     ; composing
+           [(not ev) (set! reported-keys (reported-after-press reported-keys key #f))] ; composing
            [else
             ;; keys typed in hint mode do not repeat: a repeat would reach
             ;; the program once the key ended hint mode
             (let ([hint-key? hints])
-              (when (or (key-press! ev) (key-event-composed? ev))
-                (set! consumed-keys (cons key consumed-keys)))
+              (set! reported-keys (reported-after-press reported-keys key
+                                                        (not (or (key-press! ev) (key-event-composed? ev)))))
               (if (and (not hint-key?)
                        (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
                   (begin

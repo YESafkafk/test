@@ -216,7 +216,9 @@ default, and all actions that can be bound to keys.
 `(kitty-keyboard #f)` disables the kitty keyboard protocol: chezterm then
 ignores its control sequences and does not answer `CSI ? u`, so programs keep
 to the legacy (xterm) key encoding. Keys that trigger a chezterm binding are
-never sent, and neither are their releases.
+never sent, and neither are their releases. As in kitty, a release is only
+sent when the key's press was: keys pressed while the window was unfocused,
+or held when the focus left, get no release.
 
 `(kitty-keyboard-legacy-csi-u #t)` sends keys that have no legacy encoding,
 and so send nothing by default, the way kitty does even while a program has

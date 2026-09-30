@@ -1157,6 +1157,17 @@
   (terminal-set-kitty-keyboard! t #f)
   (check "kbd disabled while flags are set" 0 (terminal-keyboard-flags t)))
 
+;;; which key releases reach the program: only those of keys whose press
+;;; did, as in kitty
+(let* ([press (lambda (r key report?) (reported-after-press r key report?))]
+       [release (lambda (r key) (let-values ([(r2 report?) (reported-after-release r key)]) (list r2 report?)))])
+  (check "releases: a reported press" '(() #t) (release (press '() 30 #t) 30))
+  (check "releases: a press kept by chezterm" '(() #f) (release (press '() 30 #f) 30))
+  (check "releases: a key pressed while unfocused" '(() #f) (release '() 30))
+  (check "releases: other keys stay" '((31) #t) (release (press (press '() 31 #t) 30 #t) 30))
+  (check "releases: a press after a kept one" '(() #t) (release (press (press '() 30 #f) 30 #t) 30))
+  (check "releases: a kept press after a reported one" '(() #f) (release (press (press '() 30 #t) 30 #f) 30)))
+
 ;;; key encoding
 (let ()
   (define (key name text mods . modes)
