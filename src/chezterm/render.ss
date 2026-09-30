@@ -541,7 +541,7 @@
                      [bg (fxvector-ref row-bg i)]
                      [style (fxior (if (fxlogtest attrs ATTR-BOLD) STYLE-BOLD 0)
                                    (if (fxlogtest attrs ATTR-ITALIC) STYLE-ITALIC 0))]
-                     [marks (and ex (hashtable-ref ex i #f))]
+                     [marks (and ex (line-marks l i))]
                      [span (if (and (fxlogtest attrs ATTR-WIDE) (fx< (fx+ i 1) ncols)) (fx* 2 cw) cw)]
                      [t (cell-tile r cp marks style fg bg span)])
                 (cond

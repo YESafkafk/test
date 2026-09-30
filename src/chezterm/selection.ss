@@ -85,7 +85,7 @@
         (unless (fxlogtest (cell-attrs v i) ATTR-SPACER)
           (let ([c (cell-ch v i)])
             (write-char (if (= c 0) #\space (integer->char c)) out)
-            (let ([marks (and ex (hashtable-ref ex i #f))])
+            (let ([marks (and ex (line-marks l i))])
               (when marks (put-string out marks))))))
       (get-output-string out)))
 

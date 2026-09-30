@@ -434,6 +434,159 @@
   (feed t "ok")
   (check "terminal alive after bad OSC" '("ok" "" "") (screen t)))
 
+;;; OSC 8 hyperlinks: parsing and storage
+(define (osc8 params uri) (esc "]8;" params ";" uri "\x1b;\\"))
+(define (link-id t row col) (line-link (grid-line (terminal-grid t) row) col))
+(define (link-at t row col) (terminal-link-uri t (link-id t row col)))
+(define (links t row) (map (lambda (c) (link-at t row c)) (iota (terminal-cols t))))
+
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://a.example/") "link" (osc8 "" "") " x")
+  (check "osc8: linked cells" (append (make-list 4 "http://a.example/") (make-list 6 #f)) (links t 0))
+  (check "osc8: text" "link x" (row-text t 0))
+  (feed t "\r\n" (esc "]8;;https://b.example/?q=1;x=2\a") "b" (esc "]8;;\a") "c")
+  (check "osc8: BEL-terminated, URI with ;" '("https://b.example/?q=1;x=2" #f) (list (link-at t 1 0) (link-at t 1 1))))
+
+;; blank cells stay all zeros, and a linked cell is stored like any other
+(let ([a (make-term 2 10)] [b (make-term 2 10)])
+  (feed a (osc8 "" "http://x/") "ab" (esc "[31m") "c" (osc8 "" ""))
+  (feed b "ab" (esc "[31m") "c")
+  (check "osc8: cells unchanged by links" #t
+         (equal? (line-cells (grid-line (terminal-grid a) 0)) (line-cells (grid-line (terminal-grid b) 0))))
+  (check "osc8: the rest of the line is all zeros" #t
+         (let ([v (line-cells (grid-line (terminal-grid a) 0))])
+           (for-all (lambda (i) (= 0 (fxvector-ref v (+ 9 i)))) (iota (* 3 7)))))
+  (check "osc8: no extras without links" #f (line-extra (grid-line (terminal-grid b) 0))))
+
+;; ids: runs with the same id and URI are one link; without an id every
+;; OSC 8 starts a link of its own
+(let ([t (make-term 3 20)])
+  (feed t (osc8 "id=x" "http://a/") "ab" (osc8 "" "") "--" (osc8 "id=x" "http://a/") "cd" (osc8 "" ""))
+  (check "osc8: same id, same link" #t (= (link-id t 0 0) (link-id t 0 4)))
+  (check "osc8: gap between the runs" 0 (link-id t 0 2))
+  (feed t "\r\n" (osc8 "" "http://a/") "ab" (osc8 "" "") (osc8 "" "http://a/") "cd" (osc8 "" ""))
+  (check "osc8: no id, separate links" #f (= (link-id t 1 0) (link-id t 1 2)))
+  (check "osc8: no id, not the id=x link" #f (= (link-id t 1 0) (link-id t 0 0)))
+  (feed t "\r\n" (osc8 "id=x" "http://other/") "ab" (osc8 "id=y" "http://a/") "cd"
+        (osc8 "foo=bar:id=x" "http://a/") "ef" (osc8 "" ""))
+  (check "osc8: same id, other URI" #f (= (link-id t 2 0) (link-id t 0 0)))
+  (check "osc8: other id, same URI" #f (= (link-id t 2 2) (link-id t 0 0)))
+  (check "osc8: id among other parameters" #t (= (link-id t 2 4) (link-id t 0 0)))
+  (check "osc8: a new link replaces the open one" "http://a/" (link-at t 2 2))
+  (check "osc8: links in use" 5 (terminal-link-count t)))
+
+;; invalid links are ignored, and end the open link
+(let ([t (make-term 3 20)])
+  (define long (string-append "http://x/" (make-string (- 2083 9) #\a)))
+  (feed t (osc8 "" long) "a" (osc8 "" (string-append long "b")) "b" (osc8 "" ""))
+  (check "osc8: 2083 bytes" long (link-at t 0 0))
+  (check "osc8: longer URIs are ignored" #f (link-at t 0 1))
+  (feed t (osc8 "" "http://a/") "c" (osc8 "" "http://ä/") "d"
+        (osc8 "" "http://a/") "e" (esc "]8;http://a/\x1b;\\") "f"
+        (osc8 "" "http://a/") "g" (osc8 (string-append "id=" (make-string 257 #\i)) "http://a/") "h"
+        (osc8 "" "http://a/b\tc") "i" (osc8 "" ""))
+  (check "osc8: invalid ones end the link" '("http://a/" #f "http://a/" #f "http://a/" #f #f)
+         (map (lambda (c) (link-at t 0 (+ c 2))) (iota 7))))
+
+;; a link wraps with its text, scrolls into the history, and survives reflow
+(let ([t (make-term 3 10 100)])
+  (feed t "ab" (osc8 "" "http://wrap.example/") "0123456789XYZ" (osc8 "" "") " end")
+  (check "osc8: wrapped" '("ab01234567" "89XYZ end" "") (screen t))
+  (check "osc8: one link across the wrap" #t
+         (and (= (link-id t 0 2) (link-id t 0 9)) (= (link-id t 0 9) (link-id t 1 4))))
+  (check "osc8: not after it" 0 (link-id t 1 5))
+  (feed t "\r\n1\r\n2\r\n3\r\n4")
+  (check "osc8: in the history" "http://wrap.example/" (link-at t -3 5))
+  (check "osc8: in the history, second row" "http://wrap.example/" (link-at t -2 3))
+  (terminal-resize! t 3 7)
+  (let ([g (terminal-grid t)])
+    ;; ab01234 / 56789XY / Z end
+    (check "osc8: reflowed narrower" "ab01234" (row-text t (- (grid-hist-count g))))
+    (check "osc8: reflowed cells keep the link"
+           '(#f #f #t #t #t #t #t)
+           (map (lambda (c) (and (link-at t (- (grid-hist-count g)) c) #t)) (iota 7)))
+    (check "osc8: reflowed, last piece" '(#t #f)
+           (map (lambda (c) (and (link-at t (- 2 (grid-hist-count g)) c) #t)) '(0 1))))
+  (terminal-resize! t 3 30)
+  (let ([row (- (grid-hist-count (terminal-grid t)))])
+    (check "osc8: reflowed wider" "ab0123456789XYZ end" (row-text t row))
+    (check "osc8: reflowed wider, link" (append '(#f #f) (make-list 13 #t) '(#f #f))
+           (map (lambda (c) (and (link-at t row c) #t)) (iota 17)))))
+
+;; the alternate screen has its own cells; the primary screen's links stay
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://main/") "main" (osc8 "" ""))
+  (feed t (esc "[?1049h") (osc8 "" "http://alt/") "alt" (osc8 "" ""))
+  (check "osc8: on the alternate screen" "http://alt/" (link-at t 0 4))
+  (feed t (esc "[?1049l"))
+  (check "osc8: back on the primary screen" "http://main/" (link-at t 0 0)))
+
+;; REP repeats the character with the link; overwriting and erasing drop it
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://r/") "x" (esc "[3b") (osc8 "" "") "yz")
+  (check "osc8: REP" '(#t #t #t #t #f #f) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 6)))
+  (feed t (esc "[1;2H") "o")
+  (check "osc8: overwritten" '(#t #f #t #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;3H") (esc "[1X"))
+  (check "osc8: ECH" '(#t #f #f #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;1H") (esc "[2@"))
+  (check "osc8: ICH moves it" '(#f #f #t #f #f #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 6)))
+  (feed t (esc "[3P"))
+  (check "osc8: DCH moves it" '(#f #f #t #f) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;3H") (esc "[K"))
+  (check "osc8: EL" #f (link-at t 0 2))
+  (feed t (esc "[H") (osc8 "" "http://r/") "abc" (osc8 "" "") (esc "[2J"))
+  (check "osc8: ED" #f (link-at t 0 0))
+  (feed t (esc "[H") (osc8 "" "http://r/") "abc" (osc8 "" "") (esc "#8"))
+  (check "osc8: DECALN" #f (link-at t 0 0))
+  (check "osc8: nothing left on the screen" '(#f #f #f)
+         (map (lambda (r) (line-extra (grid-line (terminal-grid t) r))) '(0 1 2))))
+
+;; combining marks and wide characters
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://c/") "e\x301;日x" (osc8 "" ""))
+  (check "osc8: combining mark on a linked cell" '("\x301;" "http://c/")
+         (list (line-marks (grid-line (terminal-grid t) 0) 0) (link-at t 0 0)))
+  (check "osc8: wide character: first half" "http://c/" (link-at t 0 1))
+  (check "osc8: wide character: spacer" #f (link-at t 0 2))
+  (check "osc8: after the wide character" "http://c/" (link-at t 0 3))
+  (check "osc8: selection text keeps the mark" "e\x301;日x"
+         (begin (terminal-set-selection! t (vector 'stream (terminal-abs-row t 0) 0 (terminal-abs-row t 0) 3))
+                (selection-text t))))
+
+;; DECSTR ends the link, RIS forgets all of them
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://s/") "a" (esc "[!p") "b")
+  (check "osc8: DECSTR ends the link" '(#t #f) (map (lambda (c) (and (link-at t 0 c) #t)) '(0 1)))
+  (feed t (osc8 "" "http://s/") "c" (esc "c") "d")
+  (check "osc8: RIS" '(0 #f) (list (terminal-link-count t) (link-at t 0 0))))
+
+;; the number of links is capped (16384): links no cell uses are collected,
+;; then those only the history uses; beyond that, new links are dropped
+(let ([t (make-term 3 10 0)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "\rx"))
+  (check "osc8: table full" 16384 (terminal-link-count t))
+  (feed t (osc8 "" "http://new/") "\ry" (osc8 "" ""))
+  ;; (the last of them was still open)
+  (check "osc8: unused links collected" '(2 "http://new/") (list (terminal-link-count t) (link-at t 0 0))))
+(let ([t (make-term 100 200 0)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "x"))
+  (feed t (osc8 "" "") "\r\n")
+  (check "osc8: full of live links" 16384 (terminal-link-count t))
+  (feed t (osc8 "" "http://dropped/") "y" (osc8 "" ""))
+  (check "osc8: no room: dropped" #f (link-at t (terminal-cursor-row t) 0))
+  (check "osc8: live links kept" "http://0/" (link-at t 0 0)))
+(let ([t (make-term 10 200 1000)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "x"))
+  (feed t (osc8 "" "") (apply string-append (make-list 20 "\r\n")))
+  (check "osc8: links in the history" "http://0/" (link-at t (- (grid-hist-count (terminal-grid t))) 0))
+  (feed t (osc8 "" "http://new/") "y" (osc8 "" ""))
+  (check "osc8: history links make room" "http://new/" (link-at t (terminal-cursor-row t) 0))
+  (check "osc8: history links forgotten" #f (link-at t (- (grid-hist-count (terminal-grid t))) 0)))
+
 ;;; selection text
 (let* ([t (make-term 4 10)]
        [sel (lambda (mode a ac b bc)

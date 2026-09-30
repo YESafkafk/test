@@ -25,6 +25,7 @@
           terminal-cwd terminal-dirty? terminal-dirty-set!
           terminal-set-cell-pixel-size! terminal-set-defaults!
           terminal-keyboard-flags terminal-set-kitty-keyboard!
+          terminal-link-uri terminal-link-count
           color->rgb make-default-palette)
   (import (chezscheme) (chezterm grid) (chezterm charwidth))
 
@@ -95,7 +96,14 @@
      (mutable primary-cursor)
      ;; kitty keyboard protocol: whether it is enabled, and the flags
      ;; stacks of the primary and alternate screens (see keyboard-flags!)
-     (mutable kitty-keyboard) (mutable kbd-primary) (mutable kbd-alt))
+     (mutable kitty-keyboard) (mutable kbd-primary) (mutable kbd-alt)
+     ;; OSC 8 hyperlinks (see open-link!): id -> URI, (id-param . URI) -> id,
+     ;; the next id, the id of the link being printed (0: none), and how many
+     ;; more new links to drop before collecting again
+     (mutable links) (mutable link-ids) (mutable link-next) (mutable link)
+     (mutable link-gc-pause)
+     ;; the cell extra printed characters get (see grid.ss), #f for none
+     (mutable pen-extra))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -122,7 +130,9 @@
                        (open-output-string) #f
                        cursor-style cursor-blink
                        #f
-                       #t '() '())])
+                       #t '() '()
+                       (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
+                       #f)])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -375,10 +385,7 @@
       (when (fx>= col 0)
         (let* ([col (if (and (fx> col 0) (fxlogtest (cell-attrs (line-cells l) col) ATTR-SPACER))
                         (fx- col 1) col)])
-          (unless (line-extra l) (line-extra-set! l (make-eqv-hashtable)))
-          (let ([old (hashtable-ref (line-extra l) col "")])
-            (when (fx< (string-length old) 8)
-              (hashtable-set! (line-extra l) col (string-append old (string (integer->char cp))))))))))
+          (line-add-mark! l col cp)))))
 
   (define (print! t cp0)
     (let* ([cp (if (and (eq? (vector-ref (terminal-charsets t) (terminal-gl t)) 'ascii))
@@ -418,7 +425,8 @@
                       (cell-set! v col cp (fxior attrs ATTR-WIDE) fg bg)
                       (cell-set! v (fx+ col 1) 0 (fxior attrs ATTR-SPACER) fg bg)
                       (line-extra-delete! l (fx+ col 1) (fx+ col 2)))
-                    (cell-set! v col cp attrs fg bg)))
+                    (cell-set! v col cp attrs fg bg))
+                (let ([x (terminal-pen-extra t)]) (when x (line-extra-put! l col x))))
               (terminal-last-char-set! t cp)
               (if (fx>= (fx+ col w) cols)
                   (terminal-wrap-pending-set! t #t)
@@ -451,6 +459,7 @@
                       (fxvector-set! v idx (fxior (bytevector-u8-ref bv (fx+ i k)) attrs))
                       (fxvector-set! v (fx+ idx 1) fg)
                       (fxvector-set! v (fx+ idx 2) bg)))
+                  (let ([x (terminal-pen-extra t)]) (when x (line-extra-fill! l col (fx+ col n) x)))
                   (terminal-last-char-set! t (bytevector-u8-ref bv (fx+ i (fx- n 1))))
                   (if (fx>= (fx+ col n) cols)
                       (begin
@@ -764,9 +773,10 @@
         [(equal? inter '(35))                  ; #
          (when (fx= c 56)                      ; DECALN: fill screen with E
            (do ([r 0 (fx+ r 1)]) ((fx= r (terminal-rows t)))
-             (let ([v (line-cells (grid-screen-line (terminal-grid t) r))])
+             (let ([l (grid-screen-line (terminal-grid t) r)])
+               (line-extra-set! l #f)
                (do ([col 0 (fx+ col 1)]) ((fx= col (terminal-cols t)))
-                 (cell-set! v col 69 0 COLOR-FG COLOR-BG))))
+                 (cell-set! (line-cells l) col 69 0 COLOR-FG COLOR-BG))))
            (terminal-top-set! t 0)
            (terminal-bottom-set! t (fx- (terminal-rows t) 1))
            (goto! t 0 0))]
@@ -1232,12 +1242,115 @@
                                  [else (loop (fx+ i 1))]))])
              (when slash
                (terminal-cwd-set! t (percent-decode (substring p slash (string-length p)))))))]
+        [(8) (osc-hyperlink! t rest)]
         [(52)
          (let ([parts (string-split rest #\;)])
            (when (and (fx= 2 (length parts)) (not (string=? (cadr parts) "?")))
              (let ([data (base64-decode (cadr parts))])
                (when data ((terminal-on-clipboard t) (utf8->string data))))))]
         [else (void)])))
+
+;;; OSC 8 hyperlinks --------------------------------------------------------
+  ;;; OSC 8 ; params ; URI ST starts a link that the following characters get,
+  ;;; an empty URI ends it (gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda).
+  ;;; Cells hold a link id in their cell extra, and the terminal maps ids to
+  ;;; URIs.  Every OSC 8 without an id= parameter starts a link of its own;
+  ;;; with one, runs with the same id and URI get the same link id, so that a
+  ;;; link a program draws in pieces is one link.  A URI must be printable
+  ;;; ASCII of at most max-uri-length bytes; an invalid OSC 8 ends the link.
+
+  (define max-uri-length 2083)
+  (define max-link-id-length 256)
+  (define max-links 16384)
+
+  (define (terminal-link-uri t id)
+    (and (fx> id 0) (let ([e (hashtable-ref (terminal-links t) id #f)]) (and e (car e)))))
+
+  (define (terminal-link-count t) (hashtable-size (terminal-links t)))
+
+  (define (printable-ascii? s)
+    (let loop ([i 0])
+      (or (fx= i (string-length s))
+          (and (char<=? #\space (string-ref s i) #\~) (loop (fx+ i 1))))))
+
+  (define (osc-hyperlink! t rest)
+    (let ([semi (let loop ([i 0])
+                  (cond [(fx= i (string-length rest)) #f]
+                        [(char=? (string-ref rest i) #\;) i]
+                        [else (loop (fx+ i 1))]))])
+      (set-link! t
+                 (if (not semi)
+                     0
+                     (let ([params (substring rest 0 semi)]
+                           [uri (substring rest (fx+ semi 1) (string-length rest))])
+                       (let ([id (let loop ([ps (string-split params #\:)])
+                                   (cond
+                                     [(null? ps) #f]
+                                     [(and (fx> (string-length (car ps)) 3)
+                                           (string=? (substring (car ps) 0 3) "id="))
+                                      (substring (car ps) 3 (string-length (car ps)))]
+                                     [else (loop (cdr ps))]))])
+                         (if (and (fx> (string-length uri) 0)
+                                  (fx<= (string-length uri) max-uri-length)
+                                  (printable-ascii? uri)
+                                  (or (not id) (and (fx<= (string-length id) max-link-id-length)
+                                                    (printable-ascii? id))))
+                             (link-id! t id uri)
+                             0)))))))
+
+  (define (set-link! t id)
+    (terminal-link-set! t id)
+    (update-pen! t))
+
+  (define (update-pen! t)
+    (terminal-pen-extra-set! t (make-extra "" (terminal-link t) #f)))
+
+  ;; The id for a new link to URI (with id parameter ID, or #f), or 0 when
+  ;; there is no room for it.
+  (define (link-id! t id uri)
+    (or (and id (hashtable-ref (terminal-link-ids t) (cons id uri) #f))
+        (and (or (fx< (hashtable-size (terminal-links t)) max-links) (make-room-for-link! t))
+             (let ([n (terminal-link-next t)] [key (and id (cons id uri))])
+               (terminal-link-next-set! t (fx+ n 1))
+               (hashtable-set! (terminal-links t) n (cons uri key))
+               (when key (hashtable-set! (terminal-link-ids t) key n))
+               n))
+        0))
+
+  ;; With the table full, forget the links no cell uses any more, and if
+  ;; that is not enough, those only the history uses (as kitty does); their
+  ;; cells then have no link.  When even that is not enough, the next
+  ;; max-links / 16 new links are dropped without trying again.  Ids are
+  ;; never reused, so a forgotten id cannot come back with another URI.
+  (define (make-room-for-link! t)
+    (cond
+      [(fx> (terminal-link-gc-pause t) 0)
+       (terminal-link-gc-pause-set! t (fx- (terminal-link-gc-pause t) 1))
+       #f]
+      [else
+       (collect-links! t #t)
+       (unless (fx< (hashtable-size (terminal-links t)) max-links) (collect-links! t #f))
+       (or (fx< (hashtable-size (terminal-links t)) max-links)
+           (begin (terminal-link-gc-pause-set! t (fxquotient max-links 16)) #f))]))
+
+  (define (collect-links! t history?)
+    (let ([used (make-eqv-hashtable)])
+      (hashtable-set! used (terminal-link t) #t)
+      (for-each
+       (lambda (g)
+         (do ([r (if history? (fx- (grid-hist-count g)) 0) (fx+ r 1)]) ((fx= r (grid-rows g)))
+           (let ([ex (line-extra (grid-line g r))])
+             (when ex
+               (vector-for-each (lambda (x) (hashtable-set! used (extra-link x) #t))
+                                (hashtable-values ex))))))
+       (list (terminal-primary-grid t) (terminal-alt-grid t)))
+      (let-values ([(ids entries) (hashtable-entries (terminal-links t))])
+        (vector-for-each
+         (lambda (id e)
+           (unless (hashtable-contains? used id)
+             (hashtable-delete! (terminal-links t) id)
+             (when (cdr e) (hashtable-delete! (terminal-link-ids t) (cdr e)))))
+         ids entries))))
 
   (define (percent-decode s)
     (let-values ([(out extract) (open-bytevector-output-port)])
@@ -1306,9 +1419,11 @@
     (terminal-saved-primary-set! t #f)
     (terminal-saved-alt-set! t #f)
     (terminal-wrap-pending-set! t #f)
-    ;; as in kitty, both screens' kitty keyboard flags go
+    ;; as in kitty, both screens' kitty keyboard flags go, and so does the
+    ;; hyperlink being printed
     (terminal-kbd-primary-set! t '())
-    (terminal-kbd-alt-set! t '()))
+    (terminal-kbd-alt-set! t '())
+    (set-link! t 0))
 
   (define (terminal-reset! t)
     (leave-alt-screen! t)
@@ -1330,6 +1445,9 @@
     (do ([r 0 (fx+ r 1)]) ((fx= r (terminal-rows t)))
       (line-clear! (grid-screen-line (terminal-grid t) r) COLOR-BG))
     (terminal-clear-history! t)
+    (hashtable-clear! (terminal-links t))
+    (hashtable-clear! (terminal-link-ids t))
+    (terminal-link-gc-pause-set! t 0)
     (terminal-selection-clear! t)
     (terminal-dirty-set! t #t))
 
