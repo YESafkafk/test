@@ -29,7 +29,8 @@
    xkb_keymap_key_repeats xkb_keymap_mod_get_index
    xkb_state_new xkb_state_unref xkb_state_update_mask
    xkb_state_key_get_one_sym xkb_state_key_get_utf32
-   xkb_state_mod_index_is_active xkb_keysym_to_utf32
+   xkb_state_mod_index_is_active xkb_state_key_get_layout
+   xkb_keymap_key_get_syms_by_level xkb_keysym_to_utf32
    xkb_keysym_to_lower xkb_keysym_from_name xkb_keysym_get_name
    xkb_compose_table_new_from_locale xkb_compose_table_unref
    xkb_compose_state_new xkb_compose_state_unref
@@ -487,6 +488,14 @@
   (define xkb_state_mod_index_is_active
     (foreign-procedure "xkb_state_mod_index_is_active"
       (uptr unsigned-int int)
+      int))
+  (define xkb_state_key_get_layout
+    (foreign-procedure "xkb_state_key_get_layout"
+      (uptr unsigned-int)
+      unsigned-int))
+  (define xkb_keymap_key_get_syms_by_level
+    (foreign-procedure "xkb_keymap_key_get_syms_by_level"
+      (uptr unsigned-int unsigned-int unsigned-int uptr)
       int))
   (define xkb_keysym_to_utf32
     (foreign-procedure "xkb_keysym_to_utf32"

@@ -7,7 +7,8 @@
 ;;;   close                       the compositor asked us to close
 ;;;   scale n                     integer output scale changed
 ;;;   focus bool                  keyboard focus
-;;;   key-press key-event keycode / key-release keycode
+;;;   key-press key-event keycode  (key-event #f while composing)
+;;;   key-release keycode key-event
 ;;;   pointer-enter x y / pointer-leave / pointer-motion x y
 ;;;   pointer-button button pressed?
 ;;;   scroll axis amount discrete?   (axis 0 vertical, 1 horizontal)
@@ -343,9 +344,8 @@
        (let ([serial (car args)] [key (caddr args)] [state (cadddr args)])
          (window-serial-set! w serial)
          (if (= state WL_KEYBOARD_KEY_STATE_PRESSED)
-             (let ([ev (keyboard-translate (window-keyboard w) key)])
-               (when ev (emit w 'key-press ev key)))
-             (emit w 'key-release key)))]
+             (emit w 'key-press (keyboard-translate (window-keyboard w) key KEY-PRESS) key)
+             (emit w 'key-release key (keyboard-translate (window-keyboard w) key KEY-RELEASE))))]
       [(modifiers) (apply keyboard-update-modifiers! (window-keyboard w) (cdr args))]
       [(repeat_info) (window-repeat-rate-set! w (car args)) (window-repeat-delay-set! w (cadr args))]
       [else (void)]))

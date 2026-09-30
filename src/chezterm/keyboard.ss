@@ -2,15 +2,16 @@
 ;;; translation of key events to the byte sequences terminals expect: the
 ;;; legacy xterm encoding, and the kitty keyboard protocol.
 (library (chezterm keyboard)
-  (export make-keyboard keyboard? keyboard-set-keymap! keyboard-update-modifiers!
-          keyboard-translate keyboard-repeats? keyboard-mods
+  (export make-keyboard keyboard? keyboard-set-keymap! keyboard-set-keymap-string!
+          keyboard-update-modifiers!
+          keyboard-translate keyboard-repeats? keyboard-mods keyboard-locks
           MOD-SHIFT MOD-ALT MOD-CTRL MOD-SUPER MOD-HYPER MOD-META MOD-CAPS-LOCK MOD-NUM-LOCK
           KBD-DISAMBIGUATE KBD-EVENT-TYPES KBD-ALTERNATE-KEYS KBD-ALL-KEYS KBD-TEXT
           KEY-PRESS KEY-REPEAT KEY-RELEASE
           encode-key keysym-by-name keysym-lower parse-key-binding
           make-key-event key-event-sym key-event-text key-event-mods key-event?
           key-event-locks key-event-key key-event-shifted key-event-base key-event-type
-          key-event-composed? key-event-with-type)
+          key-event-composed? key-event-with-type key-event-modifier-key?)
   (import (chezscheme) (chezterm ffi) (chezterm cutil))
 
   ;; Modifier bits, as the kitty keyboard protocol numbers them.  key-event-mods
@@ -45,7 +46,9 @@
             (mutable keymap) (mutable state)
             (mutable compose-state)
             (mutable mod-indices)        ; vector of xkb mod indices
-            (mutable mods))
+            (mutable mods)               ; MOD-SHIFT/ALT/CTRL/SUPER bits
+            (mutable locks)              ; MOD-CAPS-LOCK/NUM-LOCK bits
+            (mutable held))              ; ((evdev key . mod bit) ...) of modifier keys
     (protocol
      (lambda (new)
        (lambda ()
@@ -53,7 +56,7 @@
                 [locale (or (getenv "LC_ALL") (getenv "LC_CTYPE") (getenv "LANG") "C")]
                 [table (xkb_compose_table_new_from_locale ctx locale 0)]
                 [cstate (if (ptr-null? table) 0 (xkb_compose_state_new table 0))])
-           (new ctx 0 0 cstate (vector) 0))))))
+           (new ctx 0 0 cstate (vector) 0 0 '()))))))
 
   ;; A translated key event.
   ;;   sym       keysym, with the active modifiers applied
@@ -91,70 +94,138 @@
     (let ([p (mmap 0 size PROT_READ 2 fd 0)])     ; MAP_PRIVATE = 2
       (close fd)
       (unless (= p (- (expt 2 64) 1))
-        (let ([km (xkb_keymap_new_from_string (keyboard-context kb) p XKB_KEYMAP_FORMAT_TEXT_V1
-                                              XKB_KEYMAP_COMPILE_NO_FLAGS)])
-          (munmap p size)
-          (unless (ptr-null? km)
-            (unless (ptr-null? (keyboard-state kb)) (xkb_state_unref (keyboard-state kb)))
-            (unless (ptr-null? (keyboard-keymap kb)) (xkb_keymap_unref (keyboard-keymap kb)))
-            (keyboard-keymap-set! kb km)
-            (keyboard-state-set! kb (xkb_state_new km))
-            (keyboard-mod-indices-set!
-             kb (vector (xkb_keymap_mod_get_index km "Shift")
-                        (xkb_keymap_mod_get_index km "Mod1")
-                        (xkb_keymap_mod_get_index km "Control")
-                        (xkb_keymap_mod_get_index km "Mod4"))))))))
+        (load-keymap! kb p)
+        (munmap p size))))
+
+  ;; Load a keymap given as text (for the tests).
+  (define (keyboard-set-keymap-string! kb text)
+    (with-cstring text (lambda (p) (load-keymap! kb p))))
+
+  (define (load-keymap! kb p)
+    (let ([km (xkb_keymap_new_from_string (keyboard-context kb) p XKB_KEYMAP_FORMAT_TEXT_V1
+                                          XKB_KEYMAP_COMPILE_NO_FLAGS)])
+      (unless (ptr-null? km)
+        (unless (ptr-null? (keyboard-state kb)) (xkb_state_unref (keyboard-state kb)))
+        (unless (ptr-null? (keyboard-keymap kb)) (xkb_keymap_unref (keyboard-keymap kb)))
+        (keyboard-keymap-set! kb km)
+        (keyboard-state-set! kb (xkb_state_new km))
+        (keyboard-held-set! kb '())
+        (keyboard-mod-indices-set!
+         kb (vector (xkb_keymap_mod_get_index km "Shift")
+                    (xkb_keymap_mod_get_index km "Mod1")
+                    (xkb_keymap_mod_get_index km "Control")
+                    (xkb_keymap_mod_get_index km "Mod4")
+                    (xkb_keymap_mod_get_index km "Lock")
+                    (xkb_keymap_mod_get_index km "Mod2"))))))   ; Num Lock
+
+  (define mod-bits (vector MOD-SHIFT MOD-ALT MOD-CTRL MOD-SUPER MOD-CAPS-LOCK MOD-NUM-LOCK))
 
   (define (keyboard-update-modifiers! kb depressed latched locked group)
     (let ([st (keyboard-state kb)])
       (unless (ptr-null? st)
         (xkb_state_update_mask st depressed latched locked 0 0 group)
-        (let ([idx (keyboard-mod-indices kb)])
-          (keyboard-mods-set!
-           kb
-           (let loop ([i 0] [m 0])
-             (if (= i 4)
-                 m
-                 (loop (+ i 1)
-                       (if (> (xkb_state_mod_index_is_active st (vector-ref idx i) XKB_STATE_MODS_EFFECTIVE) 0)
-                           (logor m (vector-ref '#(1 2 4 8) i))
-                           m)))))))))
+        (let* ([idx (keyboard-mod-indices kb)]
+               [m (let loop ([i 0] [m 0])
+                    (if (= i (vector-length idx))
+                        m
+                        (loop (+ i 1)
+                              (if (> (xkb_state_mod_index_is_active st (vector-ref idx i) XKB_STATE_MODS_EFFECTIVE) 0)
+                                  (logor m (vector-ref mod-bits i))
+                                  m))))])
+          (keyboard-mods-set! kb (logand m 15))
+          (keyboard-locks-set! kb (logand m (logor MOD-CAPS-LOCK MOD-NUM-LOCK)))))))
 
   (define (keyboard-repeats? kb key)
     (and (not (ptr-null? (keyboard-keymap kb)))
          (= 1 (xkb_keymap_key_repeats (keyboard-keymap kb) (+ key 8)))))
 
   (define compose-buf (malloc 64))
+  (define syms-buf (malloc 8))
 
-  ;; Translate a pressed evdev KEY into a key-event, or #f while a compose
-  ;; sequence is in progress.
-  (define (keyboard-translate kb key)
-    (let ([st (keyboard-state kb)])
+  ;; The keysym of KEY (an xkb keycode) at the first shift level of LAYOUT,
+  ;; or #f.
+  (define (level1-sym km key layout)
+    (and (= 1 (xkb_keymap_key_get_syms_by_level km key layout 0 syms-buf))
+         (foreign-ref 'unsigned-32 (foreign-ref 'uptr syms-buf 0) 0)))
+
+  (define (utf32 sym) (xkb_keysym_to_utf32 sym))
+
+  ;; The modifier bit a modifier key sets.  The kitty keyboard protocol wants
+  ;; it in the key's own events, but xkb's state only changes after them.
+  (define (modifier-key-bit sym)
+    (cond
+      [(memv sym (list XK-Shift-L XK-Shift-R)) MOD-SHIFT]
+      [(memv sym (list XK-Control-L XK-Control-R)) MOD-CTRL]
+      [(memv sym (list XK-Alt-L XK-Alt-R)) MOD-ALT]
+      [(memv sym (list XK-Super-L XK-Super-R)) MOD-SUPER]
+      [(= sym XK-Caps-Lock) MOD-CAPS-LOCK]
+      [(= sym XK-Num-Lock) MOD-NUM-LOCK]
+      [else #f]))
+
+  ;; Modifiers and locks of an event of modifier key KEY (with keysym SYM),
+  ;; as they are after the event.  Releasing one Ctrl key while the other is
+  ;; held keeps Ctrl.
+  (define (modifier-key-state! kb key sym press)
+    (let ([bit (modifier-key-bit sym)] [mods (keyboard-mods kb)] [locks (keyboard-locks kb)])
+      (keyboard-held-set! kb (let ([h (remp (lambda (e) (= (car e) key)) (keyboard-held kb))])
+                               (if (and press bit) (cons (cons key bit) h) h)))
+      (cond
+        [(not bit) (values mods locks)]
+        [(memv bit (list MOD-CAPS-LOCK MOD-NUM-LOCK))
+         ;; a lock key toggles its lock when pressed
+         (values mods (if press (logxor locks bit) locks))]
+        [(or press (exists (lambda (e) (= (cdr e) bit)) (keyboard-held kb)))
+         (values (logor mods bit) locks)]
+        [else (values (logand mods (lognot bit)) locks)])))
+
+  ;; Translate the press or release (TYPE) of evdev KEY into a key-event, or
+  ;; #f while a compose sequence is in progress.
+  (define (keyboard-translate kb key type)
+    (let ([st (keyboard-state kb)] [km (keyboard-keymap kb)] [press (= type KEY-PRESS)])
       (and (not (ptr-null? st))
            (let* ([code (+ key 8)]
                   [sym (xkb_state_key_get_one_sym st code)]
-                  [cs (keyboard-compose-state kb)]
-                  [status (if (ptr-null? cs)
-                              XKB_COMPOSE_NOTHING
-                              (begin
-                                (xkb_compose_state_feed cs sym)
-                                (xkb_compose_state_get_status cs)))])
+                  [layout (xkb_state_key_get_layout st code)]
+                  ;; the key without modifiers; keypad keys keep what Num Lock
+                  ;; made of them
+                  [key-sym (if (<= XK-KP-Space sym XK-KP-Equal)
+                               sym
+                               (or (level1-sym km code layout) sym))]
+                  [base-sym (or (level1-sym km code 0) key-sym)]
+                  [shifted (if (= sym key-sym) 0 (utf32 sym))]
+                  [base (if (= (utf32 base-sym) (utf32 key-sym)) 0 (utf32 base-sym))]
+                  [event (lambda (sym text composed mods locks)
+                           (make-key-event sym text mods locks key-sym shifted base type composed))])
              (cond
-               [(= status XKB_COMPOSE_COMPOSING) #f]
-               [(= status XKB_COMPOSE_CANCELLED) (xkb_compose_state_reset cs) #f]
-               [(= status XKB_COMPOSE_COMPOSED)
-                (let ([n (xkb_compose_state_get_utf8 cs compose-buf 64)]
-                      [csym (xkb_compose_state_get_one_sym cs)])
-                  (xkb_compose_state_reset cs)
-                  (make-key-event csym (if (> n 0) (cstring->string compose-buf) "")
-                                  (keyboard-mods kb)))]
+               [(modifier-key-bit key-sym)
+                (let-values ([(mods locks) (modifier-key-state! kb key key-sym press)])
+                  (event sym "" #f mods locks))]
+               [(memv key-sym modifier-keys)
+                (event sym "" #f (keyboard-mods kb) (keyboard-locks kb))]
+               [(not press) (event sym "" #f (keyboard-mods kb) (keyboard-locks kb))]
                [else
-                (let ([cp (xkb_state_key_get_utf32 st code)])
-                  (make-key-event sym
-                                  (if (and (> cp 0) (not (<= #xD800 cp #xDFFF)) (< cp #x110000))
-                                      (string (integer->char cp))
-                                      "")
-                                  (keyboard-mods kb)))])))))
+                (let* ([cs (keyboard-compose-state kb)]
+                       [status (if (ptr-null? cs)
+                                   XKB_COMPOSE_NOTHING
+                                   (begin
+                                     (xkb_compose_state_feed cs sym)
+                                     (xkb_compose_state_get_status cs)))])
+                  (cond
+                    [(= status XKB_COMPOSE_COMPOSING) #f]
+                    [(= status XKB_COMPOSE_CANCELLED) (xkb_compose_state_reset cs) #f]
+                    [(= status XKB_COMPOSE_COMPOSED)
+                     (let ([n (xkb_compose_state_get_utf8 cs compose-buf 64)]
+                           [csym (xkb_compose_state_get_one_sym cs)])
+                       (xkb_compose_state_reset cs)
+                       (event csym (if (> n 0) (cstring->string compose-buf) "") #t
+                              (keyboard-mods kb) (keyboard-locks kb)))]
+                    [else
+                     (let ([cp (xkb_state_key_get_utf32 st code)])
+                       (event sym
+                              (if (and (> cp 0) (not (<= #xD800 cp #xDFFF)) (< cp #x110000))
+                                  (string (integer->char cp))
+                                  "")
+                              #f (keyboard-mods kb) (keyboard-locks kb)))]))])))))
 
   ;;; Encoding -------------------------------------------------------------------
 
@@ -175,7 +246,12 @@
     (XK-KP-0 "KP_0") (XK-KP-9 "KP_9") (XK-KP-Decimal "KP_Decimal")
     (XK-KP-Add "KP_Add") (XK-KP-Subtract "KP_Subtract") (XK-KP-Multiply "KP_Multiply")
     (XK-KP-Divide "KP_Divide") (XK-KP-Separator "KP_Separator") (XK-KP-Equal "KP_Equal")
-    (XK-F1 "F1") (XK-F35 "F35") (XK-Menu "Menu"))
+    (XK-F1 "F1") (XK-F35 "F35") (XK-Menu "Menu")
+    (XK-KP-Space "KP_Space")
+    (XK-Shift-L "Shift_L") (XK-Shift-R "Shift_R") (XK-Control-L "Control_L")
+    (XK-Control-R "Control_R") (XK-Alt-L "Alt_L") (XK-Alt-R "Alt_R")
+    (XK-Super-L "Super_L") (XK-Super-R "Super_R")
+    (XK-Caps-Lock "Caps_Lock") (XK-Num-Lock "Num_Lock"))
 
   (define (csi-mod mods)
     ;; xterm modifier parameter: 1 + shift + 2*alt + 4*ctrl + 8*super
@@ -349,6 +425,8 @@
            "ISO_Level3_Shift" "ISO_Level5_Shift")))
 
   (define (modifier-key? sym) (and (memv sym modifier-keys) #t))
+
+  (define (key-event-modifier-key? ev) (modifier-key? (key-event-key ev)))
 
   ;; The keys that keep a legacy encoding with Shift, Alt and Ctrl while keys
   ;; are not disambiguated (the specification's "legacy text keys").

@@ -1,7 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (only (chezterm ffi) xkb_keysym_from_name))
+        (chezterm termenv) (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
 (define passes 0)
@@ -576,6 +576,118 @@
   (check "keypad app" "\x1b;Oq" (key "KP_1" "1" 0 #f #t #f))
   (check "binding parse" (cons (fxior MOD-CTRL MOD-SHIFT) (keysym-by-name "c"))
          (parse-key-binding "ctrl+shift+c")))
+
+;;; key events from xkb: a two-layout keymap (us, ru), without compose
+(let ()
+  (define keymap "xkb_keymap {
+  xkb_keycodes { minimum = 8; maximum = 255;
+    <ESC> = 9; <AE02> = 11; <TAB> = 23; <LCTL> = 37; <AC01> = 38; <LFSH> = 50;
+    <AB03> = 54; <CAPS> = 66; <NMLK> = 77; <KP1> = 87; <RCTL> = 105; <UP> = 111; };
+  xkb_types {
+    type \"ONE_LEVEL\" { modifiers = none; level_name[Level1] = \"Any\"; };
+    type \"TWO_LEVEL\" { modifiers = Shift; map[Shift] = Level2;
+      level_name[Level1] = \"Base\"; level_name[Level2] = \"Shift\"; };
+    type \"ALPHABETIC\" { modifiers = Shift+Lock; map[Shift] = Level2; map[Lock] = Level2;
+      level_name[Level1] = \"Base\"; level_name[Level2] = \"Caps\"; };
+    type \"KEYPAD\" { modifiers = Shift+Mod2; map[Mod2] = Level2; map[Shift] = Level2;
+      map[Shift+Mod2] = Level1; level_name[Level1] = \"Base\"; level_name[Level2] = \"Number\"; };
+  };
+  xkb_compat { };
+  xkb_symbols {
+    key <ESC> { type = \"ONE_LEVEL\", [ Escape ] };
+    key <TAB> { type = \"ONE_LEVEL\", [ Tab ] };
+    key <UP> { type = \"ONE_LEVEL\", [ Up ] };
+    key <LCTL> { type = \"ONE_LEVEL\", [ Control_L ] };
+    key <RCTL> { type = \"ONE_LEVEL\", [ Control_R ] };
+    key <LFSH> { type = \"ONE_LEVEL\", [ Shift_L ] };
+    key <CAPS> { type = \"ONE_LEVEL\", [ Caps_Lock ] };
+    key <NMLK> { type = \"ONE_LEVEL\", [ Num_Lock ] };
+    key <KP1> { type = \"KEYPAD\", [ KP_End, KP_1 ] };
+    key <AE02> { type[Group1] = \"TWO_LEVEL\", type[Group2] = \"TWO_LEVEL\",
+      symbols[Group1] = [ 2, at ], symbols[Group2] = [ 2, quotedbl ] };
+    key <AC01> { type[Group1] = \"ALPHABETIC\", type[Group2] = \"ALPHABETIC\",
+      symbols[Group1] = [ a, A ], symbols[Group2] = [ Cyrillic_ef, Cyrillic_EF ] };
+    key <AB03> { type[Group1] = \"ALPHABETIC\", type[Group2] = \"ALPHABETIC\",
+      symbols[Group1] = [ c, C ], symbols[Group2] = [ Cyrillic_es, Cyrillic_ES ] };
+    modifier_map Shift { <LFSH> }; modifier_map Lock { <CAPS> };
+    modifier_map Control { <LCTL>, <RCTL> }; modifier_map Mod2 { <NMLK> };
+  };
+};")
+  ;; evdev keycodes, and xkb's real modifier masks
+  (define ESC 1) (define K2 3) (define TAB 15) (define LCTL 29) (define KA 30) (define LSHIFT 42)
+  (define KC 46) (define CAPS 58) (define NUMLOCK 69) (define KP1 79) (define RCTL 97) (define UP 103)
+  (define shift 1) (define lock 2) (define control 4) (define mod2 16)
+  (define kb (make-keyboard))
+  (define (mods! depressed locked group) (keyboard-update-modifiers! kb depressed 0 locked group))
+  (define (press key) (keyboard-translate kb key KEY-PRESS))
+  (define (release key) (keyboard-translate kb key KEY-RELEASE))
+  (define (fields ev)
+    (list (key-event-text ev) (key-event-mods ev) (key-event-locks ev)
+          (utf32 (key-event-key ev)) (key-event-shifted ev) (key-event-base ev)
+          (key-event-type ev)))
+  (define (utf32 sym) (let ([c (xkb_keysym_to_utf32 sym)]) (if (= c 0) sym c)))
+  (define (enc flags ev) (encode-key ev #f #f #f flags))
+  (keyboard-set-keymap-string! kb keymap)
+  (mods! 0 0 0)
+  (check "xkb: a" '("a" 0 0 97 0 0 1) (fields (press KA)))
+  (check "xkb: a release" '("" 0 0 97 0 0 3) (fields (release KA)))
+  (mods! shift 0 0)
+  (check "xkb: shift+a" (list "A" MOD-SHIFT 0 97 65 0 1) (fields (press KA)))
+  (check "xkb: shift+2" (list "@" MOD-SHIFT 0 50 64 0 1) (fields (press K2)))
+  (check "xkb: shift+2, alternates" "\x1b;[50:64;2u" (enc 12 (press K2)))
+  (mods! control 0 0)
+  (check "xkb: ctrl+a" (list "\x1;" MOD-CTRL 0 97 0 0 1) (fields (press KA)))
+  (check "xkb: ctrl+a, disambiguated" "\x1b;[97;5u" (enc 1 (press KA)))
+  (check "xkb: ctrl+a, legacy" "\x1;" (enc 0 (press KA)))
+  (mods! 0 lock 0)
+  (check "xkb: caps lock: a" (list "A" 0 MOD-CAPS-LOCK 97 65 0 1) (fields (press KA)))
+  (check "xkb: caps lock: a, all keys" "\x1b;[97;65u" (enc 8 (press KA)))
+  (mods! 0 mod2 0)
+  (check "xkb: num lock: KP_1 key" (list "1" 0 MOD-NUM-LOCK 49 0 0 1) (fields (press KP1)))
+  (mods! 0 0 0)
+  (check "xkb: KP_End" "\x1b;[57424u" (enc 1 (press KP1)))
+  (mods! 0 mod2 0)
+  (check "xkb: num lock: KP_1" "\x1b;[57400;129u" (enc 8 (press KP1)))
+  (check "xkb: num lock: KP_1 text" "1" (enc 1 (press KP1)))
+  ;; second layout: the key is Cyrillic, the base key comes from the first layout
+  (mods! 0 0 1)
+  (check "xkb: ru: es" (list "с" 0 0 1089 0 99 1) (fields (press KC)))
+  (check "xkb: ru: 2 has no base key" (list "2" 0 0 50 0 0 1) (fields (press K2)))
+  (mods! shift 0 1)
+  (check "xkb: ru: shift+es" (list "С" MOD-SHIFT 0 1089 1057 99 1) (fields (press KC)))
+  (mods! control 0 1)
+  (check "xkb: ru: ctrl+es, alternates" "\x1b;[1089::99;5u" (enc 5 (press KC)))
+  (check "xkb: ru: ctrl+es, legacy byte of ctrl+c with flag 2" "\x3;" (enc 2 (press KC)))
+  (mods! (logor control shift) 0 1)
+  (check "xkb: ru: ctrl+shift+es" "\x1b;[1089:1057:99;6u" (enc 5 (press KC)))
+  ;; modifier keys carry their own bit, including the effect of the event
+  (mods! 0 0 0)
+  (check "xkb: Control_L press" (list MOD-CTRL (xkb_keysym_from_name "Control_L" 0))
+         (let ([e (press LCTL)]) (list (key-event-mods e) (key-event-key e))))
+  (check "xkb: Control_L press, all keys" "\x1b;[57442;5u" (begin (release LCTL) (enc 8 (press LCTL))))
+  (mods! control 0 0)
+  (check "xkb: Control_R press while Control_L is held" "\x1b;[57448;5u" (enc 8 (press RCTL)))
+  (check "xkb: Control_R release, Control_L still held" "\x1b;[57448;5:3u" (enc 10 (release RCTL)))
+  (check "xkb: Control_L release" "\x1b;[57442;1:3u" (enc 10 (release LCTL)))
+  (mods! 0 0 0)
+  (check "xkb: Shift_L press" "\x1b;[57441;2u" (enc 8 (press LSHIFT)))
+  (mods! shift 0 0)
+  (check "xkb: Shift_L release" "\x1b;[57441;1:3u" (enc 10 (release LSHIFT)))
+  (mods! 0 0 0)
+  (check "xkb: Caps_Lock press locks" "\x1b;[57358;65u" (enc 8 (press CAPS)))
+  (mods! 0 lock 0)
+  (check "xkb: Caps_Lock release keeps the lock" "\x1b;[57358;65:3u" (enc 10 (release CAPS)))
+  (check "xkb: Caps_Lock press unlocks" "\x1b;[57358u" (enc 8 (press CAPS)))
+  (mods! 0 0 0)
+  (check "xkb: Num_Lock press" "\x1b;[57360;129u" (enc 8 (press NUMLOCK)))
+  (check "xkb: modifier keys, legacy" #f (enc 0 (press LSHIFT)))
+  (check "xkb: Escape" "\x1b;[27u" (enc 1 (press ESC)))
+  (check "xkb: Tab" "\t" (enc 1 (press TAB)))
+  (mods! shift 0 0)
+  (check "xkb: shift+Tab" "\x1b;[9;2u" (enc 1 (press TAB)))
+  (mods! 0 0 0)
+  (check "xkb: Up release" "\x1b;[1;1:3A" (enc 2 (release UP)))
+  (check "xkb: Up repeat" "\x1b;[1;1:2A" (enc 2 (key-event-with-type (press UP) KEY-REPEAT))))
 
 ;;; kitty keyboard protocol: encoding
 (let ()
