@@ -13,7 +13,8 @@
           COLOR-FG COLOR-BG COLOR-CURSOR COLOR-RGB
           cell-ch cell-attrs cell-fg cell-bg cell-set! cell-copy! cell-empty?
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
-          line-extra line-extra-set! line-clear! line-fill! line-content-length
+          line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
+          line-content-length
           line-copy
           make-grid grid? grid-rows grid-cols grid-line grid-screen-line
           grid-hist-count grid-hist-capacity grid-scroll-counter
@@ -79,6 +80,19 @@
 
   (define (line-cols l) (fxquotient (fxvector-length (line-cells l)) 3))
 
+  ;; Remove the combining characters of columns [from, to).  A table that
+  ;; becomes empty is dropped, so that lines without combining characters
+  ;; skip it entirely.
+  (define (line-extra-delete! l from to)
+    (let ([ex (line-extra l)])
+      (when ex
+        (if (fx< (hashtable-size ex) (fx- to from))
+            (vector-for-each (lambda (k) (when (and (fx>= k from) (fx< k to)) (hashtable-delete! ex k)))
+                             (hashtable-keys ex))
+            (do ([i from (fx+ i 1)]) ((fx>= i to))
+              (hashtable-delete! ex i)))
+        (when (fx= 0 (hashtable-size ex)) (line-extra-set! l #f)))))
+
   ;; Clear cells [from, to) to empty with background BG.
   (define (line-fill! l from to bg)
     (let ([v (line-cells l)])
@@ -87,14 +101,11 @@
           (fxvector-set! v k 0)
           (fxvector-set! v (fx+ k 1) COLOR-FG)
           (fxvector-set! v (fx+ k 2) bg)))
-      (let ([ex (line-extra l)])
-        (when ex
-          (do ([i from (fx+ i 1)]) ((fx>= i to))
-            (hashtable-delete! ex i))))))
+      (line-extra-delete! l from to)))
 
   (define (line-clear! l bg)
-    (line-fill! l 0 (line-cols l) bg)
     (line-extra-set! l #f)
+    (line-fill! l 0 (line-cols l) bg)
     (line-wrapped-set! l #f))
 
   (define (line-copy l)

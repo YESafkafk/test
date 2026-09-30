@@ -163,6 +163,25 @@
   (check "combining stored" "\x301;"
          (hashtable-ref (line-extra (grid-line (terminal-grid t) 0)) 0 #f)))
 
+;; combining marks go away with their cells, whether there are fewer marks
+;; than cleared cells or more
+(define (mark-cols t row)
+  (let ([ex (line-extra (grid-line (terminal-grid t) row))])
+    (if ex (list-sort < (vector->list (hashtable-keys ex))) '())))
+
+(let ([t (make-term 3 10)])
+  (feed t "a\x301;bc\x301;de\x301;fg\x301;h")
+  (check "marks stored" '(0 2 4 6) (mark-cols t 0))
+  (feed t (esc "[1;3H") "\x3b1;")
+  (check "overwrite drops a mark" '(0 4 6) (mark-cols t 0))
+  (feed t (esc "[1;4H") (esc "[3X"))
+  (check "erase drops marks" '(0 6) (mark-cols t 0))
+  (feed t (esc "[1;1H") "YZ")
+  (check "ASCII run drops a mark" '(6) (mark-cols t 0))
+  (feed t (esc "[1;7H") (esc "[K"))
+  (check "last mark dropped" '() (mark-cols t 0))
+  (check "text after mark changes" "YZα" (row-text t 0)))
+
 (let ([t (make-term 3 10)])
   (feed t "main" (esc "[?1049h") "alt")
   (check "alt screen (cursor kept)" '("    alt" "" "") (screen t))
