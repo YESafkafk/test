@@ -25,7 +25,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 8 hyperlinks, OSC 52 clipboard (reading only with `clipboard-read`),
+    OSC 8 hyperlinks, OSC 52 clipboard (reading it needs `clipboard-read`),
     OSC 133 shell integration marks
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
@@ -40,17 +40,19 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
 - **Ctrl+click on links and URLs** opens them with the `open-command`
-  (`xdg-open` by default): OSC 8 hyperlinks first, then URLs found in the text. Only `http`, `https`,
-  `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
-  from the program. As in kitty, a `file://` URI is only opened when its
-  host is empty, `localhost` or this machine's name, and is passed on
-  without the host (`file:///path`). Holding Ctrl over a link or a URL underlines all of it,
-  also where it continues on another row, and shows a hand.
+  (`xdg-open` by default): OSC 8 hyperlinks first, then URLs found in the
+  text. Only `http`, `https`, `ftp`, `file` and `mailto` URIs are opened,
+  since an OSC 8 link's URI comes from the program. As in kitty, a
+  `file://` URI is only opened when its host is empty, `localhost` or this
+  machine's name, and is passed on without the host (`file:///path`).
+  Holding Ctrl over a link or a URL underlines all of it, also where it
+  continues on another row, and shows a hand.
 - **Keyboard hints**, as in Alacritty: Ctrl+Shift+O labels every link and
   URL on screen (also scrolled back) with a short key sequence, and typing
   one opens it; Ctrl+Shift+Y copies it instead, `hint-paste` pastes it
-  into the program and `hint-select` selects its text. Typed keys narrow the labels down, Backspace takes one back,
-  Escape leaves. Nothing typed in hint mode reaches the program.
+  into the program and `hint-select` selects its text. Typed keys narrow
+  the labels down, Backspace takes one back, Escape leaves. Nothing typed
+  in hint mode reaches the program.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
   (CBDT bitmaps scaled to the cell), runtime font size changes.
@@ -428,6 +430,8 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
   and URLs only; there are no user-defined regex hints.
 - The kitty keyboard protocol reports Hyper and Meta only when they have a
   modifier of their own; most keymaps share them with Super and Alt.
+- BEL does not mark the window as urgent (`xdg-activation-v1`), as foot's
+  `bell.urgent` does; the visual bell only shows while the window does.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.
