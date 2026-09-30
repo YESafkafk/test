@@ -925,6 +925,27 @@
     (check "hint label cells: at the right edge"
            '(((9 10 "b" 0)) ((0 1 "a" 0) (4 5 "a" 0)))
            (map (lambda (r) (hashtable-ref cells (terminal-abs-row t r) #f)) '(0 1)))))
+;; labels longer than their targets push the next labels to the right, so
+;; that every label is shown whole; at the right edge they continue on the
+;; next row, and targets further on keep their place
+(let* ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://x/") "x" (osc8 "" "http://y/") "y" (osc8 "" "http://z/") "z" (osc8 "" "")
+        "      " (osc8 "" "http://e/") "e" (osc8 "" "") "\r\n  " (osc8 "" "http://w/") "w" (osc8 "" ""))
+  (let* ([s (hint-start 'hint-copy "ab" (hint-targets t))]
+         [cells (lambda (s) (map (lambda (r) (hashtable-ref (hint-label-cells s 10) (terminal-abs-row t r) #f))
+                                 '(0 1)))])
+    (check "hint label cells: labels pushed right"
+           '(((0 5 "bbbba" 0) (5 9 "bbba" 0) (9 10 "b" 0)) ((0 2 "ba" 0) (2 4 "ba" 0) (4 5 "a" 0)))
+           (cells s))
+    (check "hint label cells: pushed less once keys are typed"
+           '(((0 5 "bbbba" 3) (5 9 "bbba" 3)) #f)
+           (cells (let-values ([(s2 p) (hint-key s #\b)])
+                    (let-values ([(s3 p) (hint-key s2 #\b)])
+                      (let-values ([(s4 p) (hint-key s3 #\b)]) s4)))))
+    (check "hint label cells: in place when there is room"
+           '(((0 3 "bba" 0) (3 5 "ba" 0) (9 10 "a" 0)) #f)
+           (cells (hint-start 'hint-copy "ab" (let ([ts (hint-targets t)])
+                                                (map (lambda (i) (list-ref ts i)) '(0 2 3))))))))
 
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
@@ -1913,6 +1934,35 @@
       (renderer-set-hint-colors! r #xFFFFFF #x0000FF #x000000 #x00FF00)
       (renderer-render! r t #t #t labels #f)
       (check "hint colors option" #xFF0000FF (pixel 0 0)))
+    (renderer-free! r))
+;; labels pushed right by longer labels before them (hint-label-cells),
+  ;; also over wide characters, as they are typed and when they are gone
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [pixel (lambda (row col) (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                               (* 4 (+ 3 (* col cw) (* (+ 3 (* row chh)) (renderer-width r))))))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))]
+         [labels (lambda (s) (let ([cells (hint-label-cells s 20)]) (lambda (a) (hashtable-ref cells a '()))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t "ab" (osc8 "" "http://x/") "x" (osc8 "" "http://y/") "日" (osc8 "" "http://z/") "z"
+          (osc8 "" "") " end\r\nnext " (osc8 "" "http://n/") "n" (osc8 "" ""))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let* ([s (hint-start 'hint-copy "ab" (hint-targets t))]
+           [typed (let-values ([(s2 p) (hint-key s #\b)]) s2)])
+      (renderer-render! r t #t #t (labels s) #f)
+      (check "pushed hint labels = fresh" #t (equal? (snapshot r) (fresh (labels s))))
+      (check "pushed hint labels: every cell of them drawn"
+             '(#xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75)
+             (map (lambda (c) (pixel 0 c)) '(2 3 4 5 6 7 8 9 10)))
+      (renderer-render! r t #t #t (labels typed) #f)
+      (check "pushed hint labels typed = fresh" #t (equal? (snapshot r) (fresh (labels typed))))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "pushed hint labels gone = fresh" #t (equal? (snapshot r) (fresh (lambda (a) '())))))
     (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal

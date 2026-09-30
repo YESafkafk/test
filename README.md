@@ -240,7 +240,10 @@ and no label is a prefix of another: the shortest ones go to the targets
 nearest the bottom of the screen. The keys typed so far are drawn in
 `hint-typed-foreground`/`hint-typed-background`, the rest in
 `hint-foreground`/`hint-background`, and labels that no longer match
-disappear.
+disappear. Labels are always shown whole: a label longer than its target
+(a two-key label on a one-cell link, say) that runs into the next label
+pushes that label to the right, as kitty's hints kitten does. Since no
+label is a prefix of another, labels that touch still read unambiguously.
 
 As in Alacritty, the labels follow the screen while hint mode is on: when
 output arrives or the view scrolls, the targets are found again and
