@@ -20,6 +20,30 @@ so printing costs nothing extra and blank cells stay all zeros (the line's
 `extra` table made `parse/sgr` 40% slower). `draw-underline!` draws every
 style in it, and the terminfo entries advertise `Setulc`.
 
+### Shell integration (OSC 133) (done)
+
+Lines keep the OSC 133 marks printed on them (A, secondary prompts, C and
+D) in a fixnum field of the line record, which is 0 for most lines and
+reset when a line is cleared, so printing costs nothing extra. Reflow
+moves a mark to the line that holds the start of its old line. The
+`scroll-to-previous-prompt` and `scroll-to-next-prompt` actions use the A
+marks, as kitty's `scroll_to_prompt` and foot's `prompt-prev`/`prompt-next`.
+What is left:
+- **Selecting or copying a command's output**, from its C mark to the next
+  prompt (kitty's `show_last_command_output`, foot's `pipe-command-output`).
+- **Clicking in the command line to move the cursor**, which kitty offers
+  with `A;click_events=1`.
+
+### Urgency on BEL (`xdg-activation-v1`)
+
+The visual bell (`bell-duration`) only shows while the window is visible.
+foot's `bell.urgent` marks an unfocused window as urgent instead: it asks
+`xdg_activation_v1` for a token and activates its own surface with it,
+which sway (and others) turn into an urgency hint. sway offers the
+global. This needs `xdg-activation-v1.xml` in `protocols/` and the
+Makefile's `PROTOCOLS` list, binding it in `window.ss`, and an option such
+as `bell-urgent`.
+
 ### Performance findings from the benchmarks
 
 [BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with
@@ -67,23 +91,22 @@ Implemented: all five enhancement flags, the per-screen flags stacks in
 (tested against the specification's examples), release/repeat events in
 `app.ss`, Hyper and Meta when the keymap puts them on a modifier of their
 own (found by walking the keymap, as kitty does), and optionally `CSI u`
-for keys without a legacy encoding (`kitty-keyboard-legacy-csi-u`). What is
-left:
+for keys without a legacy encoding (`kitty-keyboard-legacy-csi-u`). As in
+kitty, a release is only reported when the press was: not for keys
+pressed while the window was unfocused (foot reports those), and not for
+keys held when the focus left (`reported-after-press` in `keyboard.ss`).
+What is left:
 - **Hyper and Meta on a shared modifier.** Most keymaps put Hyper on Mod4
   with Super and Meta on Mod1 with Alt. Such a Hyper key then reports
   Super: the compositor only sends real modifiers, so the two cannot be
   told apart.
-- **Keys pressed while the window was unfocused.** Their release, after the
-  focus came back, is reported although the application never saw the
-  press. foot does the same, kitty drops such releases. Keys held when the
-  focus leaves get no release, as in kitty and foot.
 - **Other keys without a legacy encoding.** With flags 0, only keys that
   send nothing at all can be sent as `CSI u`. Keys such as Ctrl+Shift+letter
   or modified F13–F20 keep their legacy bytes, which kitty replaces.
 
 ### Keyboard hints (Alacritty's "hints") (done)
 
-`hint-open`, `hint-copy` and `hint-select` label the OSC 8 links and URLs
+`hint-open`, `hint-copy`, `hint-paste` and `hint-select` label the OSC 8 links and URLs
 on screen (`hint-targets` in `selection.ss`), with Alacritty's labels and
 key handling (`hints.ss`); the renderer draws labels as highlight entries.
 Like Alacritty, the targets are found again on every frame, so labels
@@ -93,8 +116,10 @@ follow output and scrolling. What is left:
   has no regex library, so targets come from built-in matchers; more
   matchers (paths, hashes, IP addresses) could be added to
   `span-targets` the way URLs are, with a way to choose them per binding.
-- **More actions**: pasting the target, or running a configured command
-  on it instead of `xdg-open`.
+- **A command per hint.** `hint-paste` pastes the target and
+  `open-command` replaces `xdg-open` (as Alacritty's `Paste` and
+  `command`), but there is one command for all links; Alacritty gives
+  every hint its own. That would come with user-defined hints.
 
 ### IME (`zwp_text_input_v3`)
 

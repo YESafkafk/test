@@ -48,10 +48,12 @@
   (define repeat-key #f)          ; evdev keycode
   (define repeat-event #f)
   (define repeat-next 0)
-  ;; evdev keycodes of held keys whose press chezterm kept to itself (a key
-  ;; binding, the search prompt, a compose sequence): their releases are not
-  ;; reported to the application either
-  (define consumed-keys '())
+  ;; evdev keycodes of held keys whose press was reported to the program:
+  ;; only their releases are (see reported-after-press)
+  (define reported-keys '())
+
+  ;; visual bell
+  (define bell-start #f)          ; when the flash started, while it lasts
 
   ;; cursor blinking
   (define blink-on #t)
@@ -301,8 +303,9 @@
              [damage (begin
                        (update-hover!)       ; the text under the pointer may have changed
                        (when hints (update-hints!))
-                       (renderer-render! renderer term focused blink-on highlights
-                                         (and search-active (search-overlay))))]
+                       (let ([d (renderer-render! renderer term focused blink-on highlights
+                                                  (and search-active (search-overlay)))])
+                         (if bell-start (flash-bell! d) d)))]
              [t1 (now-ms)])
         (set! backlog-next-frame (+ t1 (min max-backlog-frame-gap (* 4 (- t1 t0)))))
         (unless (null? damage)
@@ -310,6 +313,20 @@
                            (renderer-height renderer) damage
                            (< (config-ref 'opacity) 1.0))))
       (when dump-frame (check-dump-frame!))))
+
+  ;; The visual bell: the window tinted with the bell color, fading out
+  ;; linearly over bell-duration ms, as Alacritty's Linear animation.  Every
+  ;; frame of the flash is a full redraw (renderer-tint! makes the next
+  ;; one full), and so is the one after it.
+  (define (flash-bell! damage)
+    (let* ([duration (config-ref 'bell-duration)]
+           [left (- (+ bell-start duration) (now-ms))])
+      (if (and (real? duration) (> left 0))
+          (begin
+            (set! need-redraw #t)       ; the next frame fades further
+            (renderer-tint! renderer (or (color-option 'bell) #xffffff)
+                            (exact (round (* 255 (/ left duration))))))
+          (begin (set! bell-start #f) damage))))
 
   (define (check-dump-frame!)
     (when (>= (- (now-ms) start-time) (cdr dump-frame))
@@ -392,6 +409,7 @@
                                  [else (write-char c out) (loop (+ i 1))]))))
                          (get-output-string out))])
       (terminal-scroll-to-bottom! term)
+      (typing!)
       (if (terminal-bracketed-paste? term)
           (send! (string-append "\x1b;[200~" normalized "\x1b;[201~"))
           (send! normalized))))
@@ -505,6 +523,7 @@
          (set! search-query "") (set! search-match #f) (set! need-redraw #t)]
         [(and (> (string-length text) 0) (char>=? (string-ref text 0) #\space)
               (not (logtest mods MOD-CTRL)))
+         (typing!)
          (set! search-query (string-append search-query text))
          (search-step! search-backward #t)
          (set! need-redraw #t)]
@@ -567,8 +586,10 @@
 
   (define (run-hint-action! action t)
     (case action
-      [(hint-open) (spawn-detached (list "xdg-open" (uri-to-open (target-uri t) hostname)) #f)]
+      [(hint-open) (open-uri! (uri-to-open (target-uri t) hostname))]
       [(hint-copy) (window-set-clipboard! win 'clipboard (target-uri t))]
+      ;; as if pasted, so bracketed paste applies (Alacritty's Paste)
+      [(hint-paste) (paste-text! (target-uri t))]
       [(hint-select)
        (let ([s (target-start t)] [e (target-end t)])
          (terminal-set-selection! term (vector 'stream (car s) (cdr s) (car e) (- (cdr e) 1)))
@@ -592,6 +613,8 @@
       [(scroll-line-down) (terminal-scroll-display! term -1)]
       [(scroll-to-top) (terminal-scroll-display! term (grid-hist-count (terminal-grid term)))]
       [(scroll-to-bottom) (terminal-scroll-to-bottom! term)]
+      [(scroll-to-previous-prompt) (scroll-to-prompt! -1)]
+      [(scroll-to-next-prompt) (scroll-to-prompt! 1)]
       [(clear-history) (terminal-clear-history! term)]
       [(clear-selection) (terminal-selection-clear! term)]
       [(reset) (terminal-reset! term)]
@@ -599,7 +622,7 @@
       [(toggle-fullscreen) (window-toggle-fullscreen! win)]
       [(search-forward) (start-search! #f)]
       [(search-backward) (start-search! #t)]
-      [(hint-open hint-copy hint-select) (start-hints! action)]
+      [(hint-open hint-copy hint-paste hint-select) (start-hints! action)]
       [(quit) (set! quit? #t)]
       [(none) (void)]
       [else
@@ -607,18 +630,50 @@
          [(string? action) (send! action)]
          [else (warn "unknown action ~s" action)])]))
 
+  ;; Put the previous or next prompt (OSC 133;A) at the top of the view.
+  (define (scroll-to-prompt! dir)
+    (let ([offset (prompt-view-offset term dir)])
+      (when offset
+        (terminal-scroll-display! term (- offset (terminal-display-offset term))))))
+
+  ;; Open URI with the open-command, the URI appended as its last argument
+  ;; (as Alacritty's hint command).
+  (define (open-uri! uri)
+    (let ([cmd (config-ref 'open-command)])
+      (if (and (pair? cmd) (for-all string? cmd))
+          (spawn-detached (append cmd (list uri)) #f)
+          (warn "invalid open-command ~s: a list of strings needed" cmd))))
+
   (define last-bell -1000)
 
-  ;; BEL: run the configured bell command, at most every 100 ms
+  ;; BEL: flash the window (the visual bell), and run the configured bell
+  ;; command, at most every 100 ms
   (define (ring-bell!)
-    (let ([cmd (config-ref 'bell-command)] [t (now-ms)])
+    (let ([cmd (config-ref 'bell-command)] [t (now-ms)] [duration (config-ref 'bell-duration)])
+      (when (and (real? duration) (> duration 0))
+        (set! bell-start t)
+        (set! need-redraw #t))
       (when (and cmd (> (- t last-bell) 100))
         (set! last-bell t)
         (spawn-detached (if (string? cmd) (list cmd) cmd) #f))))
 
+  ;; OSC 52 query for selection LETTER, meaning WHICH ('clipboard or
+  ;; 'primary).  With (clipboard-read allow) the text is read like a paste
+  ;; and sent back base64 encoded; otherwise, and when there is no text,
+  ;; the reply is empty, as kitty answers a denied read, so that programs
+  ;; need not wait for a reply that never comes.
+  (define (clipboard-read! letter which terminator)
+    (case (config-ref 'clipboard-read)
+      [(allow) (window-request-paste! win which (list 'osc52 letter terminator))]
+      [(deny) (send! (osc52-reply letter "" terminator))]
+      [else
+       (warn "invalid clipboard-read ~s: allow or deny" (config-ref 'clipboard-read))
+       (send! (osc52-reply letter "" terminator))]))
+
   (define (spawn-new-instance!)
     (let ([exe (or (getenv "CHEZTERM_EXE") "chezterm")]
-          [cwd (or (terminal-cwd term) (and child-pid (process-cwd child-pid)))])
+          [cwd (or (let ([uri (terminal-cwd-uri term)]) (and uri (uri-local-path uri hostname)))
+                   (and child-pid (process-cwd child-pid)))])
       (spawn-detached (list exe) cwd)))
 
   ;; Bindings match Shift, Alt, Ctrl and Super only.
@@ -647,15 +702,26 @@
         ;; modifier keys and releases (kitty keyboard protocol) keep the view
         (unless (or (= (key-event-type ev) KEY-RELEASE) (key-event-modifier-key? ev))
           (terminal-scroll-to-bottom! term)
-          (reset-blink!))
+          (reset-blink!)
+          (typing!))
         (send! bytes))))
 
   (define (key-release! key ev)
-    (if (memv key consumed-keys)
-        (set! consumed-keys (remv key consumed-keys))
-        (when ev (send-key! ev))))
+    (let-values ([(keys report?) (reported-after-release reported-keys key)])
+      (set! reported-keys keys)
+      (when (and report? ev) (send-key! ev))))
 
   ;;; Mouse --------------------------------------------------------------------------------
+
+  ;; With mouse-hide-when-typing, the pointer is hidden while typing, as in
+  ;; Alacritty: when a key other than a modifier is sent to the program,
+  ;; on a paste and when a search is typed.  It shows again when it moves,
+  ;; a button is pressed or the wheel turns.
+  (define (typing!)
+    (when (and pointer-inside (config-ref 'mouse-hide-when-typing))
+      (window-hide-cursor! win #t)))
+
+  (define (show-pointer!) (window-hide-cursor! win #f))
 
   (define (mouse-reporting?)
     (and (terminal-mouse-mode term)
@@ -694,6 +760,7 @@
     (cond [(= button BTN-LEFT) 0] [(= button BTN-MIDDLE) 1] [(= button BTN-RIGHT) 2] [else #f]))
 
   (define (pointer-button! button pressed?)
+    (show-pointer!)
     (set! mouse-buttons (if pressed? (cons button mouse-buttons) (remv button mouse-buttons)))
     (let ([cell (pointer-view-cell)])
       (cond
@@ -715,7 +782,7 @@
                (cond
                  [(and ctrl (= click-count 1)
                        (let ([url (url-at term pt)]) (and url (uri-to-open url hostname))))
-                  => (lambda (url) (spawn-detached (list "xdg-open" url) #f))]
+                  => open-uri!]
                  [else
                   (set! select-anchor pt)
                   (set! select-block ctrl)
@@ -765,6 +832,7 @@
   (define (target-key t) (and t (list (target-uri t) (target-start t) (target-end t))))
 
   (define (pointer-motion! x y)
+    (show-pointer!)
     (set! mouse-x x)
     (set! mouse-y y)
     (set! pointer-inside #t)
@@ -791,6 +859,7 @@
 
   (define (scroll! amount discrete?)
     ;; amount: wheel steps when discrete?, else surface pixels
+    (show-pointer!)
     (let ([lines (if discrete?
                      (* amount (config-ref 'scroll-multiplier))
                      (begin
@@ -835,26 +904,23 @@
            (set-font! font-size s)))]
       [(focus)
        ;; Keys held while the focus leaves get no release, as in kitty and
-       ;; foot.  A consumed key keeps its release to itself when it is still
-       ;; held after the focus came back; keys released meanwhile are dropped.
+       ;; foot, and neither do keys pressed while it is away, as in kitty
        (set! focused (car args))
-       (if focused
-           (set! consumed-keys (filter (lambda (k) (memv k (cadr args))) consumed-keys))
-           (set! repeat-key #f))
+       (set! reported-keys '())
+       (unless focused (set! repeat-key #f))
        (update-hover!)
        (when (terminal-focus-events? term) (send! (if focused "\x1b;[I" "\x1b;[O")))
        (set! need-redraw #t)]
       [(key-press)
        (let ([ev (car args)] [key (cadr args)])
-         (set! consumed-keys (remv key consumed-keys))
          (cond
-           [(not ev) (set! consumed-keys (cons key consumed-keys))]     ; composing
+           [(not ev) (set! reported-keys (reported-after-press reported-keys key #f))] ; composing
            [else
             ;; keys typed in hint mode do not repeat: a repeat would reach
             ;; the program once the key ended hint mode
             (let ([hint-key? hints])
-              (when (or (key-press! ev) (key-event-composed? ev))
-                (set! consumed-keys (cons key consumed-keys)))
+              (set! reported-keys (reported-after-press reported-keys key
+                                                        (not (or (key-press! ev) (key-event-composed? ev)))))
               (if (and (not hint-key?)
                        (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
                   (begin
@@ -872,7 +938,11 @@
       [(pointer-motion) (pointer-motion! (car args) (cadr args))]
       [(pointer-button) (pointer-button! (car args) (cadr args))]
       [(scroll) (when (= (car args) 0) (scroll! (cadr args) (caddr args)))]
-      [(paste) (when (cadr args) (paste-text! (cadr args)))]
+      [(paste)
+       (let ([text (cadr args)] [tag (caddr args)])
+         (if (and (pair? tag) (eq? (car tag) 'osc52))
+             (send! (osc52-reply (cadr tag) (or text "") (caddr tag)))
+             (when text (paste-text! text))))]
       [(frame) (void)]
       [else (void)]))
 
@@ -1083,6 +1153,7 @@ Options:
           (lambda (title) (when (config-ref 'dynamic-title) (window-set-title! win title)))
           ring-bell!
           (lambda (text) (window-set-clipboard! win 'clipboard text)))
+        (terminal-set-clipboard-read-handler! term clipboard-read!)
         (let ([program (or (opt 'command)
                            (let ([sh (config-ref 'shell)])
                              (if sh

@@ -11,7 +11,8 @@
           encode-key keysym-by-name keysym-lower parse-key-binding
           make-key-event key-event-sym key-event-text key-event-mods key-event-legacy-mods
           key-event? key-event-locks key-event-key key-event-shifted key-event-base
-          key-event-type key-event-composed? key-event-with-type key-event-modifier-key?)
+          key-event-type key-event-composed? key-event-with-type key-event-modifier-key?
+          reported-after-press reported-after-release)
   (import (chezscheme) (chezterm ffi) (chezterm cutil))
 
   ;; Modifier bits, as the kitty keyboard protocol numbers them.  key-event-mods
@@ -271,6 +272,23 @@
     (keyboard-mods-set! kb 0)
     (keyboard-locks-set! kb 0)
     (keyboard-held-set! kb '()))
+
+  ;; Key releases reach the program only for keys whose press did, as in
+  ;; kitty: not for a key chezterm kept to itself (a key binding, a
+  ;; compose sequence, the search prompt, hint mode), and not for a key
+  ;; pressed while the window was unfocused.  REPORTED lists the keycodes
+  ;; of held keys whose press was reported (sent to the program or not,
+  ;; as the encoding decides); it is emptied when the focus changes, since
+  ;; keys held when the focus leaves get no release either.
+
+  ;; REPORTED after a press of KEY, reported to the program or not (REPORT?)
+  (define (reported-after-press reported key report?)
+    (let ([rest (remv key reported)])
+      (if report? (cons key rest) rest)))
+
+  ;; REPORTED after a release of KEY, and whether the release is reported
+  (define (reported-after-release reported key)
+    (values (remv key reported) (and (memv key reported) #t)))
 
   (define (keyboard-repeats? kb key)
     (and (not (ptr-null? (keyboard-keymap kb)))

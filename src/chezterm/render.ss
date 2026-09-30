@@ -9,7 +9,7 @@
           renderer-pixels renderer-width renderer-height renderer-stride
           renderer-invalidate! renderer-set-font! renderer-font
           renderer-cols renderer-rows renderer-set-padding! renderer-free!
-          renderer-tile-count renderer-set-hint-colors!)
+          renderer-tile-count renderer-set-hint-colors! renderer-tint!)
   (import (chezscheme) (chezterm ffi) (chezterm grid) (chezterm terminal) (chezterm font))
 
 ;; The image is composited with pixman: backgrounds are filled in runs,
@@ -36,7 +36,8 @@
             bold-is-bright
             selection-fg selection-bg
             hollow-unfocused
-            (mutable hint-colors))           ; #(fg bg typed-fg typed-bg) of hint labels
+            (mutable hint-colors)            ; #(fg bg typed-fg typed-bg) of hint labels
+            (mutable tinted))                ; the image was tinted (renderer-tint!)
     (protocol
      (lambda (new)
        (lambda (font pad-x pad-y opacity bold-is-bright sel-fg sel-bg hollow)
@@ -47,7 +48,7 @@
               (make-eq-hashtable) (make-fxvector 0) (make-fxvector 0)
               (max 0 (min 255 (exact (round (* 255 opacity)))))
               bold-is-bright sel-fg sel-bg hollow
-              (vector #x181818 #xF4BF75 #x181818 #xAC4242))))))
+              (vector #x181818 #xF4BF75 #x181818 #xAC4242) #f)))))
 
   (define (renderer-cols r)
     (max 1 (fxquotient (fx- (renderer-width r) (fx* 2 (renderer-pad-x r)))
@@ -388,11 +389,13 @@
            [cols (fxmin (terminal-cols term) (renderer-cols r))]
            [palette (terminal-palette term)]
            [bg-default (vector-ref palette COLOR-BG)]
-           [full? (not (and (renderer-last-palette r) (equal? (renderer-last-palette r) palette)
+           [full? (not (and (not (renderer-tinted r))
+                            (renderer-last-palette r) (equal? (renderer-last-palette r) palette)
                             (eq? (renderer-last-reverse r) (terminal-reverse-video? term))
                             (fx= (vector-length (renderer-row-keys r)) rows)))]
            [damage '()])
       (when full?
+        (renderer-tinted-set! r #f)
         (renderer-last-palette-set! r (vector-copy palette))
         (renderer-last-reverse-set! r (terminal-reverse-video? term))
         (renderer-row-keys-set! r (make-vector rows #f))
@@ -455,6 +458,23 @@
               (let ([y0 (fx+ (renderer-pad-y r) (fx* row ch))])
                 (set! damage (cons (cons y0 (fx+ y0 ch)) damage)))))))
       damage))
+
+  ;; Tint the whole image with RGB at ALPHA (0-255), over what was drawn:
+  ;; the visual bell.  The next renderer-render! redraws everything.
+  ;; Returns the damage, all of the image.
+  (define (renderer-tint! r rgb alpha)
+    (let ([p (argb rgb (fxmax 0 (fxmin 255 alpha)))])
+      ;; pixman takes the solid color premultiplied, as argb gives it
+      (ftype-set! pixman_color (red) color-buf (fx* 257 (fxand #xFF (fxsrl p 16))))
+      (ftype-set! pixman_color (green) color-buf (fx* 257 (fxand #xFF (fxsrl p 8))))
+      (ftype-set! pixman_color (blue) color-buf (fx* 257 (fxand #xFF p)))
+      (ftype-set! pixman_color (alpha) color-buf (fx* 257 (fxsrl p 24)))
+      (let ([img (pixman_image_create_solid_fill (ftype-pointer-address color-buf))])
+        (pixman_image_composite32 PIXMAN_OP_OVER img 0 (renderer-image r) 0 0 0 0 0 0
+                                  (renderer-width r) (renderer-height r))
+        (pixman_image_unref img))
+      (renderer-tinted-set! r #t)
+      (list (cons 0 (renderer-height r)))))
 
   ;; Move the pixels of rows [k, rows) up to row 0 and shift the row keys.
   (define (scroll-pixels! r keys k rows)

@@ -25,7 +25,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 8 hyperlinks, OSC 52 clipboard (write only)
+    OSC 8 hyperlinks, OSC 52 clipboard (reading it needs `clipboard-read`),
+    OSC 133 shell integration marks
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
 - **Scrollback** (configurable size), which stays in place while new output
@@ -34,20 +35,24 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   and block (Ctrl+drag) selection, extending with right click, and autoscroll while dragging.
 - **Clipboard** (`wl_data_device`) and **primary selection**
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
+- **Jumping between prompts** (Ctrl+Shift+Z / Ctrl+Shift+X) that the shell
+  marks with OSC 133, as in kitty and foot; see [Shell integration](#shell-integration).
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
-- **Ctrl+click on links and URLs** opens them with `xdg-open`: OSC 8
-  hyperlinks first, then URLs found in the text. Only `http`, `https`,
-  `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
-  from the program. As in kitty, a `file://` URI is only opened when its
-  host is empty, `localhost` or this machine's name, and is passed on
-  without the host (`file:///path`). Holding Ctrl over a link or a URL underlines all of it,
-  also where it continues on another row, and shows a hand.
+- **Ctrl+click on links and URLs** opens them with the `open-command`
+  (`xdg-open` by default): OSC 8 hyperlinks first, then URLs found in the
+  text. Only `http`, `https`, `ftp`, `file` and `mailto` URIs are opened,
+  since an OSC 8 link's URI comes from the program. As in kitty, a
+  `file://` URI is only opened when its host is empty, `localhost` or this
+  machine's name, and is passed on without the host (`file:///path`).
+  Holding Ctrl over a link or a URL underlines all of it, also where it
+  continues on another row, and shows a hand.
 - **Keyboard hints**, as in Alacritty: Ctrl+Shift+O labels every link and
   URL on screen (also scrolled back) with a short key sequence, and typing
-  one opens it; Ctrl+Shift+Y copies it instead, and `hint-select` selects
-  its text. Typed keys narrow the labels down, Backspace takes one back,
-  Escape leaves. Nothing typed in hint mode reaches the program.
+  one opens it; Ctrl+Shift+Y copies it instead, `hint-paste` pastes it
+  into the program and `hint-select` selects its text. Typed keys narrow
+  the labels down, Backspace takes one back, Escape leaves. Nothing typed
+  in hint mode reaches the program.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
   (CBDT bitmaps scaled to the cell), runtime font size changes.
@@ -56,6 +61,10 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
 - **Background opacity** (premultiplied ARGB buffers).
 - Server-side decorations through `xdg-decoration` when the compositor offers them.
 - `wp_cursor_shape_v1` pointer cursors, with an XCursor theme fallback.
+  `(mouse-hide-when-typing #t)` hides the pointer while typing, as
+  Alacritty's `mouse.hide_when_typing`: when a key is sent to the program,
+  on a paste and in the search prompt, until the pointer moves, a button is
+  pressed or the wheel turns.
 - Keyboard handling through xkbcommon, including compose/dead keys, key repeat,
   application cursor/keypad modes and xterm-style modifier encoding.
 - The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
@@ -67,8 +76,13 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   apart keys like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
-- Spawning a new instance in the current working directory (Ctrl+Shift+N).
-- Optional `bell-command` run on BEL.
+- Spawning a new instance in the current working directory (Ctrl+Shift+N):
+  the one a program reported with OSC 7 when its host is empty, `localhost`
+  or this machine's name (compared exactly, as for `file://` links), as in
+  foot, or else the shell's.
+- A visual bell on BEL, as in Alacritty: `(bell-duration 150)` flashes the
+  window in the `bell` color (white by default), fading out over that many
+  milliseconds. Independently, an optional `bell-command` is run.
 - Its own terminfo entries, `chezterm` and `chezterm-direct` (see
   [Terminfo](#terminfo)), so programs know about underline styles,
   synchronized output, cursor shapes, the clipboard and true color.
@@ -207,7 +221,9 @@ default, and all actions that can be bound to keys.
 `(kitty-keyboard #f)` disables the kitty keyboard protocol: chezterm then
 ignores its control sequences and does not answer `CSI ? u`, so programs keep
 to the legacy (xterm) key encoding. Keys that trigger a chezterm binding are
-never sent, and neither are their releases.
+never sent, and neither are their releases. As in kitty, a release is only
+sent when the key's press was: keys pressed while the window was unfocused,
+or held when the focus left, get no release.
 
 `(kitty-keyboard-legacy-csi-u #t)` sends keys that have no legacy encoding,
 and so send nothing by default, the way kitty does even while a program has
@@ -215,18 +231,47 @@ not asked for the protocol: media keys, Print, Pause, Scroll Lock and
 F21–F35 as `CSI u` (e.g. `CSI 57428 u` for Play), and Menu as `CSI 29 ~`.
 Every other key is encoded exactly as before.
 
+### Clipboard access (OSC 52)
+
+Programs can always set the clipboard with OSC 52. Reading it (`OSC 52 ;
+c ; ? ST`) is off by default, because anything running in the terminal,
+also on a remote host, could then read what was copied elsewhere.
+`(clipboard-read allow)` answers queries with the clipboard's text, base64
+encoded, read like a paste; `p` and `s` ask for the primary selection, as
+in foot and Alacritty. The reply ends with the query's terminator (BEL or
+ST), as in foot and Alacritty. With `deny` (the default), or when there is
+no text, the reply is empty (`OSC 52 ; c ; ST`), as kitty answers a read it
+does not allow, so that programs do not wait for a reply that never comes.
+
 ### Keyboard hints
 
-`hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y) and `hint-select`
-(not bound) label every target on screen: each OSC 8 link once, however
-many runs or rows it takes, and every URL found in the text, also where it
-wraps onto the next row. `hint-open` labels only what Ctrl+click would
-open. Labels are made of `hint-alphabet`'s characters, as in Alacritty,
+`hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y), `hint-paste` and
+`hint-select` (not bound) label every target on screen: each OSC 8 link
+once, however many runs or rows it takes, and every URL found in the
+text, also where it wraps onto the next row. Typing a label runs the
+action on its target's URI: for a URL found in the text, that is its
+text, and for an OSC 8 link, the link's URI.
+- `hint-open` labels only what Ctrl+click would open, and runs the
+  `open-command` with the URI appended as the last argument, as
+  Alacritty's hint `command` does. Ctrl+click uses the same command:
+
+  ```scheme
+  (open-command "firefox" "--new-window")   ; default: (open-command "xdg-open")
+  ```
+- `hint-copy` copies the URI to the clipboard.
+- `hint-paste` writes the URI to the program as if it had been pasted, as
+  Alacritty's `Paste` action does, so bracketed paste applies.
+- `hint-select` selects the target's text.
+
+Labels are made of `hint-alphabet`'s characters, as in Alacritty,
 and no label is a prefix of another: the shortest ones go to the targets
 nearest the bottom of the screen. The keys typed so far are drawn in
 `hint-typed-foreground`/`hint-typed-background`, the rest in
 `hint-foreground`/`hint-background`, and labels that no longer match
-disappear.
+disappear. Labels are always shown whole: a label longer than its target
+(a two-key label on a one-cell link, say) that runs into the next label
+pushes that label to the right, as kitty's hints kitten does. Since no
+label is a prefix of another, labels that touch still read unambiguously.
 
 As in Alacritty, the labels follow the screen while hint mode is on: when
 output arrives or the view scrolls, the targets are found again and
@@ -235,6 +280,23 @@ Ctrl+C), when a label is complete, when no target is left, and when the
 window is resized. While it is on, key bindings are off and no key reaches
 the program, not even as a release; search cannot start, and hint mode
 cannot start during a search.
+
+### Shell integration
+
+A shell can mark where its prompts start with OSC 133, as kitty and foot
+understand it: `OSC 133 ; A ST` before the prompt, `C` where the command's
+output starts and `D` when the command has ended (`B`, the end of the
+prompt, is ignored, as in kitty and foot). Marks stay with their lines in
+the scrollback, also when lines are reflowed. `scroll-to-previous-prompt`
+(Ctrl+Shift+Z) and `scroll-to-next-prompt` (Ctrl+Shift+X), kitty's and
+foot's default keys, put the previous or next prompt at the top of the
+window; the prompt already at the top is skipped, and so are secondary
+prompts (`A` with `k=s`, as in kitty). In bash, for example:
+
+```sh
+PS1='\[\e]133;A\e\\\]'$PS1
+PS0='\e]133;C\e\\'
+```
 
 ### Terminfo
 
@@ -287,9 +349,11 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 | Shift+PageUp / Shift+PageDown | scroll by a page |
 | Shift+Home / Shift+End | scroll to the top / bottom |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | scroll by a line |
+| Ctrl+Shift+Z / Ctrl+Shift+X | scroll to the previous / next prompt (OSC 133) |
 | Ctrl+Shift+F / Ctrl+Shift+B | search forward / backward (Enter: next, Shift+Enter: previous, Esc: exit) |
 | Ctrl+Shift+O | open a link or URL with keyboard hints (`hint-open`) |
 | Ctrl+Shift+Y | copy a link's or URL's URI with keyboard hints (`hint-copy`) |
+| (not bound) | paste a link's or URL's URI into the program with keyboard hints (`hint-paste`) |
 | (not bound) | select a link's or URL's text with keyboard hints (`hint-select`) |
 | Ctrl+Shift+K | clear the scrollback |
 | Ctrl+Shift+N | open a new window in the current directory |
@@ -297,7 +361,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 
 Mouse: drag to select, double/triple click for words/lines, Ctrl+drag for a block,
 right click to extend. Hold Shift to select while an application uses the mouse.
-Ctrl+click opens links and URLs.
+Ctrl+click opens links and URLs with the `open-command`.
 
 ## How it is built
 
@@ -366,6 +430,8 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
   and URLs only; there are no user-defined regex hints.
 - The kitty keyboard protocol reports Hyper and Meta only when they have a
   modifier of their own; most keymaps share them with Super and Alt.
+- BEL does not mark the window as urgent (`xdg-activation-v1`), as foot's
+  `bell.urgent` does; the visual bell only shows while the window does.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.

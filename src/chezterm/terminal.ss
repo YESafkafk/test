@@ -22,10 +22,11 @@
           terminal-selection terminal-set-selection! terminal-selection-clear!
           terminal-abs-row terminal-rel-row
           terminal-set-callbacks! terminal-reset! terminal-clear-history!
-          terminal-cwd terminal-dirty? terminal-dirty-set!
+          terminal-cwd-uri terminal-dirty? terminal-dirty-set!
           terminal-set-cell-pixel-size! terminal-set-defaults!
           terminal-keyboard-flags terminal-set-kitty-keyboard!
           terminal-link-uri terminal-link-count
+          terminal-set-clipboard-read-handler! osc52-reply
           color->rgb make-default-palette)
   (import (chezscheme) (chezterm grid) (chezterm charwidth))
 
@@ -77,7 +78,8 @@
      ;; charsets
      (mutable charsets) (mutable gl)
      ;; misc
-     (mutable title) (mutable title-stack) (mutable cwd)
+     (mutable title) (mutable title-stack)
+     (mutable cwd-uri)                ; the working directory's URI (OSC 7)
      (mutable palette) (mutable default-palette)
      (mutable last-char)
      (mutable display-offset)
@@ -107,7 +109,9 @@
      (mutable pen-extra)
      ;; underline color (SGR 58), #f for the foreground, and what it adds to
      ;; the foreground field of printed cells (see ul-field)
-     (mutable ul-color) (mutable ul-bits))
+     (mutable ul-color) (mutable ul-bits)
+     ;; called for an OSC 52 query, see osc-clipboard!
+     (mutable on-clipboard-read))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -136,7 +140,8 @@
                        #f
                        #t '() '()
                        (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
-                       #f #f 0)])
+                       #f #f 0
+                       (lambda (letter which term) (void)))])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -150,6 +155,12 @@
     (terminal-on-title-set! t on-title)
     (terminal-on-bell-set! t on-bell)
     (terminal-on-clipboard-set! t on-clipboard))
+
+  ;; HANDLER is called as (HANDLER letter which terminator) when a program
+  ;; asks for the clipboard with OSC 52; see osc-clipboard!.  Without one,
+  ;; queries get no reply.
+  (define (terminal-set-clipboard-read-handler! t handler)
+    (terminal-on-clipboard-read-set! t handler))
 
   ;; Apply new defaults from a configuration reload: palette and cursor.
   ;; Colors changed by the application (OSC 4/10/11/12) are reset.
@@ -1251,22 +1262,72 @@
         [(111) (vector-set! palette COLOR-BG (vector-ref (terminal-default-palette t) COLOR-BG))]
         [(112) (vector-set! palette COLOR-CURSOR (vector-ref (terminal-default-palette t) COLOR-CURSOR))]
         [(7)
-         ;; file://host/path
+         ;; file://host/path, kept as it is: whether the host is this
+         ;; machine is up to the reader (see uri-local-path)
          (when (and (fx> (string-length rest) 7) (string=? (substring rest 0 7) "file://"))
-           (let* ([p (substring rest 7 (string-length rest))]
-                  [slash (let loop ([i 0])
-                           (cond [(fx= i (string-length p)) #f]
-                                 [(char=? (string-ref p i) #\/) i]
-                                 [else (loop (fx+ i 1))]))])
-             (when slash
-               (terminal-cwd-set! t (percent-decode (substring p slash (string-length p)))))))]
+           (terminal-cwd-uri-set! t rest))]
         [(8) (osc-hyperlink! t rest)]
-        [(52)
-         (let ([parts (string-split rest #\;)])
-           (when (and (fx= 2 (length parts)) (not (string=? (cadr parts) "?")))
-             (let ([data (base64-decode (cadr parts))])
-               (when data ((terminal-on-clipboard t) (utf8->string data))))))]
+        [(133) (shell-mark! t rest)]
+        [(52) (osc-clipboard! t rest term)]
         [else (void)])))
+
+  ;;; OSC 52 clipboard ------------------------------------------------------
+  ;;; OSC 52 ; selections ; base64 ST sets the clipboard.  With ? instead of
+  ;;; the data it asks for it: the first of the selection characters that
+  ;;; is c (the clipboard), p or s (the primary selection, as foot and
+  ;;; Alacritty take them) is passed to the clipboard read handler, with
+  ;;; which of the two it means and the query's terminator, so that the
+  ;;; reply (see osc52-reply) can end the same way, as in foot and
+  ;;; Alacritty.  No selection characters mean c; a query for cut buffers
+  ;;; only (0-7) is ignored.
+
+  (define (osc-clipboard! t rest term)
+    (let ([parts (string-split rest #\;)])
+      (when (fx= 2 (length parts))
+        (if (string=? (cadr parts) "?")
+            (let* ([sel (car parts)]
+                   [letter (if (string=? sel "")
+                               #\c
+                               (find (lambda (c) (memv c '(#\c #\p #\s))) (string->list sel)))])
+              (when letter
+                ((terminal-on-clipboard-read t) letter (if (char=? letter #\c) 'clipboard 'primary) term)))
+            (let ([data (base64-decode (cadr parts))])
+              (when data ((terminal-on-clipboard t) (utf8->string data))))))))
+
+  ;; The reply to an OSC 52 query for selection LETTER: TEXT, base64
+  ;; encoded, and TERM, the query's terminator.
+  (define (osc52-reply letter text term)
+    (string-append "\x1b;]52;" (string letter) ";" (base64-encode (string->utf8 text)) term))
+
+  (define (base64-encode bv)
+    (let ([chars "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"]
+          [n (bytevector-length bv)]
+          [out (open-output-string)])
+      (let loop ([i 0])
+        (when (fx< i n)
+          (let* ([k (fxmin 3 (fx- n i))]
+                 [b (lambda (j) (if (fx< j k) (bytevector-u8-ref bv (fx+ i j)) 0))]
+                 [v (fxior (fxsll (b 0) 16) (fxsll (b 1) 8) (b 2))])
+            (do ([j 0 (fx+ j 1)]) ((fx= j 4))
+              (write-char (if (fx<= j k) (string-ref chars (fxand 63 (fxsrl v (fx- 18 (fx* 6 j))))) #\=) out))
+            (loop (fx+ i 3)))))
+      (get-output-string out)))
+
+  ;;; OSC 133 shell integration ----------------------------------------------
+  ;;; OSC 133 ; A|C|D [; options] ST marks the line the cursor is on (see
+  ;;; MARK-PROMPT in grid.ss).  As in kitty, an A with the option k=s starts
+  ;;; a secondary prompt.  B (the end of the prompt), the other options and
+  ;;; D's exit status are ignored, as kitty and foot do.
+
+  (define (shell-mark! t rest)
+    (let ([opts (string-split rest #\;)])
+      (when (fx= 1 (string-length (car opts)))
+        (let ([m (case (string-ref rest 0)
+                   [(#\A) (if (member "k=s" (cdr opts)) MARK-SECONDARY-PROMPT MARK-PROMPT)]
+                   [(#\C) MARK-OUTPUT]
+                   [(#\D) MARK-END]
+                   [else 0])])
+          (unless (fx= m 0) (line-add-marks! (cur-line t) m))))))
 
   ;;; OSC 8 hyperlinks --------------------------------------------------------
   ;;; OSC 8 ; params ; URI ST starts a link that the following characters get,
@@ -1369,17 +1430,6 @@
              (hashtable-delete! (terminal-links t) id)
              (when (cdr e) (hashtable-delete! (terminal-link-ids t) (cdr e)))))
          ids entries))))
-
-  (define (percent-decode s)
-    (let-values ([(out extract) (open-bytevector-output-port)])
-      (let loop ([i 0] [n (string-length s)])
-        (cond
-          [(fx= i n) (utf8->string (extract))]
-          [(and (char=? (string-ref s i) #\%) (fx< (fx+ i 2) n)
-                (hex-digit? (string-ref s (fx+ i 1))) (hex-digit? (string-ref s (fx+ i 2)))
-                (string->number (substring s (fx+ i 1) (fx+ i 3)) 16))
-           => (lambda (b) (put-u8 out b) (loop (fx+ i 3) n))]
-          [else (put-bytevector out (string->utf8 (string (string-ref s i)))) (loop (fx+ i 1) n)]))))
 
   (define (base64-decode s)
     (define (val c)

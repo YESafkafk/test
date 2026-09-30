@@ -45,9 +45,9 @@
                                   [else (cons (+ (car rest) 1) (cdr rest))]))))
                   (cons (list->string (map (lambda (i) (vector-ref chars i)) (reverse indices))) acc))))))
 
-  ;; ACTION is what picking a target does (hint-open, hint-copy or
-  ;; hint-select), TARGETS a vector in reading order, LABELS the vector of
-  ;; their labels, TYPED the keys typed so far.
+  ;; ACTION is what picking a target does (hint-open, hint-copy,
+  ;; hint-paste or hint-select), TARGETS a vector in reading order, LABELS
+  ;; the vector of their labels, TYPED the keys typed so far.
   (define-record-type hint-state (fields action alphabet targets labels typed))
 
   ;; The shortest labels go to the last targets, those nearest the bottom
@@ -120,21 +120,29 @@
   ;; highlights.  A label covers the cells from its target's first visible
   ;; cell on, continuing on the next row at the right edge; TEXT is the part
   ;; of the label in columns [c0, c1), TYPED how many of its characters have
-  ;; been typed.  Entries are in reading order, so where a long label runs
-  ;; into the next target's label, the next one is drawn over it.
+  ;; been typed.  Labels are always shown whole, in reading order: a label
+  ;; longer than its target that runs into the next target's label pushes
+  ;; that label to the right, as kitty's hints kitten does.  (Alacritty
+  ;; cuts such a label off at the end of its target instead, but then two
+  ;; labels can show the same characters.)
   (define (hint-label-cells state cols)
     (let ([table (make-eqv-hashtable)] [typed (string-length (hint-state-typed state))])
-      (for-each
-       (lambda (v)
-         (let ([label (cdr v)] [pos (target-label (car v))])
-           (let loop ([abs (car pos)] [col (cdr pos)] [off 0])
-             (when (< off (string-length label))
-               (let ([n (min (- cols col) (- (string-length label) off))])
-                 (hashtable-update! table abs
-                                    (lambda (l)
-                                      (append l (list (list col (+ col n) (substring label off (+ off n))
-                                                            (max 0 (min n (- typed off)))))))
-                                    '())
-                 (loop (+ abs 1) 0 (+ off n)))))))
-       (hint-visible state))
+      (let next ([vs (hint-visible state)] [free-abs #f] [free-col 0])
+        ;; FREE-ABS, FREE-COL: the first cell after the previous label
+        (unless (null? vs)
+          (let* ([label (cdar vs)] [pos (target-label (caar vs))]
+                 [pushed (and free-abs (or (> free-abs (car pos))
+                                           (and (= free-abs (car pos)) (> free-col (cdr pos)))))])
+            (let loop ([abs (if pushed free-abs (car pos))] [col (if pushed free-col (cdr pos))] [off 0])
+              (if (< off (string-length label))
+                  (let ([n (min (- cols col) (- (string-length label) off))])
+                    (hashtable-update! table abs
+                                       (lambda (l)
+                                         (append l (list (list col (+ col n) (substring label off (+ off n))
+                                                               (max 0 (min n (- typed off)))))))
+                                       '())
+                    (if (= (+ col n) cols)
+                        (loop (+ abs 1) 0 (+ off n))
+                        (loop abs (+ col n) (+ off n))))
+                  (next (cdr vs) abs col))))))
       table)))

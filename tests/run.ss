@@ -1,7 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref)
+        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref config-normalize)
         (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
@@ -351,6 +351,89 @@
   (feed t "ab日本")
   (terminal-resize! t 3 3)
   (check "reflow wide" '("ab" "日" "本") (screen t)))
+
+;;; OSC 52: writes go to the clipboard, queries to the read handler with
+;;; the selection they ask for and their terminator
+(let* ([t (make-term 3 10)] [writes '()] [reads '()])
+  (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (void)) (lambda () (void))
+                           (lambda (s) (set! writes (cons s writes))))
+  (feed t (esc "]52;c;aMOpbGxv") "\x7;" (esc "]52;;?") "\x7;")
+  (check "OSC 52 query without a handler is ignored" '("héllo") writes)
+  (terminal-set-clipboard-read-handler! t (lambda (letter which term) (set! reads (cons (list letter which term) reads))))
+  (feed t (esc "]52;c;?") "\x7;" (esc "]52;;?") (esc "\\") (esc "]52;p;?") "\x7;" (esc "]52;s;?") "\x7;"
+        (esc "]52;s0;?") "\x7;" (esc "]52;0;?") "\x7;" (esc "]52;c;?;x") "\x7;")
+  (check "OSC 52 queries"
+         '((#\c clipboard "\x7;") (#\c clipboard "\x1b;\\") (#\p primary "\x7;") (#\s primary "\x7;")
+           (#\s primary "\x7;"))
+         (reverse reads))
+  (check "OSC 52 query is not a write" '("héllo") writes))
+(check "OSC 52 reply" "\x1b;]52;c;aMOpbGxv\x7;" (osc52-reply #\c "héllo" "\x7;"))
+(check "OSC 52 reply: base64 padding" '("\x1b;]52;p;\x1b;\\" "\x1b;]52;s;YQ==\x7;" "\x1b;]52;c;YWI=\x7;" "\x1b;]52;c;YWJj\x7;")
+       (list (osc52-reply #\p "" "\x1b;\\") (osc52-reply #\s "a" "\x7;") (osc52-reply #\c "ab" "\x7;")
+             (osc52-reply #\c "abc" "\x7;")))
+(let ([t (make-term 3 10)] [writes '()] [text (list->string (map (lambda (i) (integer->char (+ 32 i))) (iota 300)))])
+  (terminal-set-callbacks! t (lambda (s) (void)) (lambda (s) (void)) (lambda () (void))
+                           (lambda (s) (set! writes (cons s writes))))
+  (let ([r (osc52-reply #\c text "\x7;")])
+    (feed t (esc "]52;c;" (substring r 7 (string-length r))))
+    (check "OSC 52 reply decodes to the text" (list text) writes)))
+
+;;; OSC 133 shell integration: marks on the cursor's line, kept through
+;;; the history and reflow
+(define (osc133 x) (esc "]133;" x "\x1b;\\"))
+(define (marks t row) (line-marks-field (grid-line (terminal-grid t) row)))
+
+(let ([t (make-term 6 10)])
+  (feed t (osc133 "A") "$ ls" (osc133 "B") "\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A;k=s")
+        "> " "\x1b;]133;A;aid=1\x7;" (osc133 "AB") (osc133 "E") (osc133 ""))
+  (check "OSC 133: A, C, D and secondary prompts; B ignored"
+         (list MARK-PROMPT MARK-OUTPUT (fxior MARK-END MARK-SECONDARY-PROMPT MARK-PROMPT) 0)
+         (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (feed t "\r\n\r\n\r\n\r\n\r\n")
+  (check "OSC 133: marks go into the history" (list MARK-PROMPT MARK-OUTPUT)
+         (list (marks t -2) (marks t -1)))
+  (feed t (osc133 "A") (esc "[2J"))
+  (check "OSC 133: a cleared line loses its mark" 0 (marks t (terminal-cursor-row t)))
+  (feed t (osc133 "A") (esc "[2K"))
+  (check "OSC 133: erasing the text in the line keeps it" MARK-PROMPT (marks t (terminal-cursor-row t))))
+
+(let ([t (make-term 4 10 100)])
+  ;; a prompt wrapped over two rows, a mark on the wrapped part of a line,
+  ;; and a mark on an empty line after the content
+  (feed t (osc133 "A") "0123456789ab\r\n" "xyz01234567" (osc133 "C") "89\r\n" (osc133 "D"))
+  (check "reflow marks: before" (list MARK-PROMPT 0 0 MARK-OUTPUT MARK-END)
+         (map (lambda (r) (marks t r)) '(-1 0 1 2 3)))
+  (terminal-resize! t 4 5)
+  (check "reflow marks: narrower" '("01234" "56789" "ab" "xyz01" "23456" "789" "")
+         (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: on the lines that hold them, narrower"
+         (list MARK-PROMPT 0 0 0 0 MARK-OUTPUT MARK-END)
+         (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (terminal-resize! t 4 20)
+  (check "reflow marks: wider" (list MARK-PROMPT (fxior MARK-OUTPUT) MARK-END 0)
+         (map (lambda (r) (marks t r)) '(0 1 2 3))))
+
+;;; jumping between prompts: the line after the view's top is searched
+(let ([t (make-term 3 10 100)])
+  (feed t (osc133 "A") "p1\r\no\r\no\r\n" (osc133 "A") "p2\r\no\r\n" (osc133 "A;k=s") "s\r\n"
+        (osc133 "A") "p3\r\no\r\no\r\no\r\n" (osc133 "A") "p4")
+  ;; rows: p1 -8, p2 -5, s -3, p3 -2, p4 2 (the screen: o o p4)
+  (let ([jump (lambda (dir)
+                (let ([o (prompt-view-offset t dir)])
+                  (when o (terminal-scroll-display! t (- o (terminal-display-offset t))))
+                  (and o (row-text t (- (terminal-display-offset t))))))])
+    (check "prompts: previous" "p3" (jump -1))
+    (check "prompts: previous skips the one at the top and secondary prompts" "p2" (jump -1))
+    (check "prompts: previous again" "p1" (jump -1))
+    (check "prompts: none before the first" #f (jump -1))
+    (check "prompts: the view stays" 8 (terminal-display-offset t))
+    (check "prompts: next" "p2" (jump 1))
+    (check "prompts: next again" "p3" (jump 1))
+    (check "prompts: next on the screen scrolls to the bottom" 0
+           (begin (jump 1) (terminal-display-offset t)))
+    (check "prompts: next at the bottom" 0 (prompt-view-offset t 1))
+    (feed t (esc "[?1049h"))
+    (check "prompts: not on the alternate screen" #f (prompt-view-offset t -1))))
 
 ;;; scrollback view anchoring
 (let ([t (make-term 2 5)])
@@ -759,6 +842,22 @@
    #f))
 (check "uri-to-open: empty host name" #f (uri-to-open "file://other/x" ""))
 
+;;; OSC 7: the reported URI is kept; its path is used when its host is
+;;; this machine, by the rule of uri-to-open
+(let ([t (make-term 3 10)])
+  (check "OSC 7: none" #f (terminal-cwd-uri t))
+  (feed t (esc "]7;file://remote/home/me\x7;"))
+  (check "OSC 7: any host is kept" "file://remote/home/me" (terminal-cwd-uri t))
+  (feed t (esc "]7;http://x/\x7;"))
+  (check "OSC 7: only file URIs" "file://remote/home/me" (terminal-cwd-uri t)))
+(check "uri-local-path"
+       '("/tmp/a b" "/x" "/x" #f #f "/x" "/tmp/x" "/é" "/a%-1b" #f #f #f #f "/")
+       (map (lambda (u) (uri-local-path u "myhost"))
+            '("file:///tmp/a%20b" "file://localhost/x" "file://myhost/x" "file://other/x" "file://MyHost/x"
+              "file://myhost:22/x" "file:///tmp/x?q#f" "file:///%C3%A9" "file://myhost/a%-1b" "file://"
+              "file://myhost" "http://myhost/x" "file:relative" "FILE:///")))
+(check "uri-local-path: no host name" #f (uri-local-path "file://other/x" ""))
+
 ;;; hint targets: OSC 8 links and URLs found in the text, as
 ;;; (uri start end label link?) with screen rows (negative in the history)
 (define (targets t)
@@ -841,7 +940,21 @@
          (let ([h (make-hashtable equal-hash equal?)]) (for-each (lambda (k) (hashtable-set! h k #t)) keys)
            (hashtable-size h)))
   (check "default bindings: hints" '(hint-open hint-copy)
-         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y"))))
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y")))
+  (check "default bindings: prompts, as in kitty and foot" '(scroll-to-previous-prompt scroll-to-next-prompt)
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+z" "ctrl+shift+x")))
+  (check "default bindings: hint-paste and hint-select not bound" '()
+         (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
+
+;;; options that are off by default
+(check "off by default: clipboard-read, bell-duration, mouse-hide-when-typing" '(deny 0 #f)
+       (map config-ref '(clipboard-read bell-duration mouse-hide-when-typing)))
+
+;;; open-command: a list of strings, the URI is appended to it
+(check "open-command: default" '("xdg-open") (config-ref 'open-command))
+(check "open-command: one string" '(open-command "firefox") (config-normalize '(open-command "firefox")))
+(check "open-command: with arguments" '(open-command "firefox" "--new-window")
+       (config-normalize '(open-command "firefox" "--new-window")))
 
 ;;; hint labels
 (check "hint labels: Alacritty's sequence"
@@ -917,6 +1030,27 @@
     (check "hint label cells: at the right edge"
            '(((9 10 "b" 0)) ((0 1 "a" 0) (4 5 "a" 0)))
            (map (lambda (r) (hashtable-ref cells (terminal-abs-row t r) #f)) '(0 1)))))
+;; labels longer than their targets push the next labels to the right, so
+;; that every label is shown whole; at the right edge they continue on the
+;; next row, and targets further on keep their place
+(let* ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://x/") "x" (osc8 "" "http://y/") "y" (osc8 "" "http://z/") "z" (osc8 "" "")
+        "      " (osc8 "" "http://e/") "e" (osc8 "" "") "\r\n  " (osc8 "" "http://w/") "w" (osc8 "" ""))
+  (let* ([s (hint-start 'hint-copy "ab" (hint-targets t))]
+         [cells (lambda (s) (map (lambda (r) (hashtable-ref (hint-label-cells s 10) (terminal-abs-row t r) #f))
+                                 '(0 1)))])
+    (check "hint label cells: labels pushed right"
+           '(((0 5 "bbbba" 0) (5 9 "bbba" 0) (9 10 "b" 0)) ((0 2 "ba" 0) (2 4 "ba" 0) (4 5 "a" 0)))
+           (cells s))
+    (check "hint label cells: pushed less once keys are typed"
+           '(((0 5 "bbbba" 3) (5 9 "bbba" 3)) #f)
+           (cells (let-values ([(s2 p) (hint-key s #\b)])
+                    (let-values ([(s3 p) (hint-key s2 #\b)])
+                      (let-values ([(s4 p) (hint-key s3 #\b)]) s4)))))
+    (check "hint label cells: in place when there is room"
+           '(((0 3 "bba" 0) (3 5 "ba" 0) (9 10 "a" 0)) #f)
+           (cells (hint-start 'hint-copy "ab" (let ([ts (hint-targets t)])
+                                                (map (lambda (i) (list-ref ts i)) '(0 2 3))))))))
 
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
@@ -1038,6 +1172,17 @@
   (feed t (esc "[>1u"))
   (terminal-set-kitty-keyboard! t #f)
   (check "kbd disabled while flags are set" 0 (terminal-keyboard-flags t)))
+
+;;; which key releases reach the program: only those of keys whose press
+;;; did, as in kitty
+(let* ([press (lambda (r key report?) (reported-after-press r key report?))]
+       [release (lambda (r key) (let-values ([(r2 report?) (reported-after-release r key)]) (list r2 report?)))])
+  (check "releases: a reported press" '(() #t) (release (press '() 30 #t) 30))
+  (check "releases: a press kept by chezterm" '(() #f) (release (press '() 30 #f) 30))
+  (check "releases: a key pressed while unfocused" '(() #f) (release '() 30))
+  (check "releases: other keys stay" '((31) #t) (release (press (press '() 31 #t) 30 #t) 30))
+  (check "releases: a press after a kept one" '(() #t) (release (press (press '() 30 #f) 30 #t) 30))
+  (check "releases: a kept press after a reported one" '(() #f) (release (press (press '() 30 #t) 30 #f) 30)))
 
 ;;; key encoding
 (let ()
@@ -1905,6 +2050,68 @@
       (renderer-set-hint-colors! r #xFFFFFF #x0000FF #x000000 #x00FF00)
       (renderer-render! r t #t #t labels #f)
       (check "hint colors option" #xFF0000FF (pixel 0 0)))
+    (renderer-free! r))
+;; labels pushed right by longer labels before them (hint-label-cells),
+  ;; also over wide characters, as they are typed and when they are gone
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [pixel (lambda (row col) (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                               (* 4 (+ 3 (* col cw) (* (+ 3 (* row chh)) (renderer-width r))))))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))]
+         [labels (lambda (s) (let ([cells (hint-label-cells s 20)]) (lambda (a) (hashtable-ref cells a '()))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t "ab" (osc8 "" "http://x/") "x" (osc8 "" "http://y/") "日" (osc8 "" "http://z/") "z"
+          (osc8 "" "") " end\r\nnext " (osc8 "" "http://n/") "n" (osc8 "" ""))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let* ([s (hint-start 'hint-copy "ab" (hint-targets t))]
+           [typed (let-values ([(s2 p) (hint-key s #\b)]) s2)])
+      (renderer-render! r t #t #t (labels s) #f)
+      (check "pushed hint labels = fresh" #t (equal? (snapshot r) (fresh (labels s))))
+      (check "pushed hint labels: every cell of them drawn"
+             '(#xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75)
+             (map (lambda (c) (pixel 0 c)) '(2 3 4 5 6 7 8 9 10)))
+      (renderer-render! r t #t #t (labels typed) #f)
+      (check "pushed hint labels typed = fresh" #t (equal? (snapshot r) (fresh (labels typed))))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "pushed hint labels gone = fresh" #t (equal? (snapshot r) (fresh (lambda (a) '())))))
+    (renderer-free! r))
+;; the visual bell tints the whole image; the frame after it is a full
+  ;; redraw, also when nothing changed or the output scrolled meanwhile
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [pixel (lambda (x y) (foreign-ref 'unsigned-32 (renderer-pixels r) (* 4 (+ x (* y (renderer-width r))))))])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "some text\r\n" (esc "[41m") "red" (esc "[0m"))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: damage" (list (cons 0 (renderer-height r))) (renderer-tint! r #x00FF00 255))
+    (check "bell tint: opaque" '(#xFF00FF00 #xFF00FF00) (list (pixel 0 0) (pixel (- (renderer-width r) 1) (- (renderer-height r) 1))))
+    (check "bell tint: next frame = fresh" #t
+           (begin (renderer-render! r t #t #t (lambda (a) '()) #f) (equal? (snapshot r) (fresh-render t))))
+    (renderer-tint! r #x00FF00 128)
+    (check "bell tint: blended over the background" #xFF008000 (pixel 0 0))
+    (feed t "\r\n1\r\n2\r\n3\r\n4\r\n5")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: scrolled meanwhile = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (check "bell tint: then incremental again" '() (renderer-render! r t #t #t (lambda (a) '()) #f))
+    (renderer-free! r))
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 0.8 #f #f #x444444 #t)])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "translucent")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (renderer-tint! r #xFFFFFF 100)
+    (check "bell tint: premultiplied" #t
+           (let ([p (foreign-ref 'unsigned-32 (renderer-pixels r) 0)])
+             (for-all (lambda (s) (<= (bitwise-and #xFF (bitwise-arithmetic-shift-right p s))
+                                      (bitwise-arithmetic-shift-right p 24)))
+                      '(0 8 16))))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "bell tint: opacity, next frame = fresh" #t (equal? (snapshot r) (fresh-render t f 0.8)))
     (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal
