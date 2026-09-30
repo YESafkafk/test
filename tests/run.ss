@@ -509,6 +509,18 @@
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; a full redraw sets every pixel, also in a window that is not a whole
+  ;; number of cells and has more rows and columns than the terminal
+  (let ([t (make-term 4 15)])
+    (feed t (esc "[44m") "blue" (esc "[0m") " text\r\n" (esc "[7m") "rev")
+    (let ([over (lambda (garbage)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 11 (* 20 (font-cell-width f))) (+ 13 (* 6 (font-cell-height f))))
+                    (do ([i 0 (+ i 1)]) ((= i (* (renderer-width r) (renderer-height r))))
+                      (foreign-set! 'unsigned-32 (renderer-pixels r) (* 4 i) garbage))
+                    (renderer-render! r t #t #t (lambda (a) '()) #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))])
+      (check "full redraw sets every pixel" #t (equal? (over #xABABABAB) (over #x5C5C5C5C)))))
   ;; the tile cache: more glyph/color combinations than it holds (8192), so
   ;; entries are evicted, and earlier screens drawn again after that
   (let* ([t (make-term 6 20)]

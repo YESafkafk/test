@@ -385,9 +385,13 @@
         (renderer-last-palette-set! r (vector-copy palette))
         (renderer-last-reverse-set! r (terminal-reverse-video? term))
         (renderer-row-keys-set! r (make-vector rows #f))
-        (fill-rect! r 0 0 (renderer-width r) (renderer-height r)
-                    (argb (if (terminal-reverse-video? term) (vector-ref palette COLOR-FG) bg-default)
-                          (renderer-opacity r)))
+        ;; every row is redrawn across the whole width below, so only the
+        ;; margins above and below the rows need filling here
+        (let ([pixel (argb (if (terminal-reverse-video? term) (vector-ref palette COLOR-FG) bg-default)
+                           (renderer-opacity r))]
+              [y1 (fx+ (renderer-pad-y r) (fx* rows ch))])
+          (fill-rect! r 0 0 (renderer-width r) (renderer-pad-y r) pixel)
+          (fill-rect! r 0 y1 (renderer-width r) (renderer-height r) pixel))
         (set! damage (list (cons 0 (renderer-height r)))))
       (let* ([keys (renderer-row-keys r)]
              [g (terminal-grid term)]
