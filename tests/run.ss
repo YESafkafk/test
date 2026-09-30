@@ -819,6 +819,15 @@
   (check "text-url-at: second half of a wide character" "https://例え.jp/パス"
          (text-url-at t (cons (terminal-abs-row t 0) 24))))
 
+;;; default key bindings: no two on the same keys
+(let ([keys (map (lambda (b) (parse-key-binding (car b))) (config-ref 'bindings))])
+  (check "default bindings parse" #t (and (for-all values keys) #t))
+  (check "default bindings: no two on the same keys" (length keys)
+         (let ([h (make-hashtable equal-hash equal?)]) (for-each (lambda (k) (hashtable-set! h k #t)) keys)
+           (hashtable-size h)))
+  (check "default bindings: hints" '(hint-open hint-copy)
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y"))))
+
 ;;; hint labels
 (check "hint labels: Alacritty's sequence"
        '("0" "1" "20" "21" "30" "31" "220" "221" "230" "231" "320" "321" "330" "331"

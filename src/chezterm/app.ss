@@ -6,7 +6,7 @@
   (import (chezscheme) (chezterm ffi) (chezterm cutil) (chezterm config)
           (chezterm charwidth) (chezterm grid) (chezterm terminal) (chezterm font)
           (chezterm render) (chezterm keyboard) (chezterm window) (chezterm pty)
-          (chezterm selection) (chezterm termenv))
+          (chezterm selection) (chezterm hints) (chezterm termenv))
 
   (define version "0.1.0")
 
@@ -77,6 +77,10 @@
   (define search-query "")
   (define search-match #f)        ; #(abs c0 c1)
 
+  ;; keyboard hints
+  (define hints #f)               ; the hint state (see hints.ss) while hint mode is on
+  (define hint-cells #f)          ; its labels by absolute row (hint-label-cells)
+
   ;; live configuration reload
   (define config-file #f)
   (define config-watch-fd #f)
@@ -127,11 +131,16 @@
                (config-ref 'font-bold-family) (config-ref 'font-italic-family)))
 
   (define (create-renderer f)
-    (make-renderer f pad-x pad-y (config-ref 'opacity)
-                   (config-ref 'bold-is-bright)
-                   (color-option 'selection-foreground)
-                   (or (color-option 'selection-background) #x4f4f4f)
-                   (config-ref 'cursor-unfocused-hollow)))
+    (let ([r (make-renderer f pad-x pad-y (config-ref 'opacity)
+                            (config-ref 'bold-is-bright)
+                            (color-option 'selection-foreground)
+                            (or (color-option 'selection-background) #x4f4f4f)
+                            (config-ref 'cursor-unfocused-hollow))])
+      (renderer-set-hint-colors! r (or (color-option 'hint-foreground) #x181818)
+                                 (or (color-option 'hint-background) #xf4bf75)
+                                 (or (color-option 'hint-typed-foreground) #x181818)
+                                 (or (color-option 'hint-typed-background) #xac4242))
+      r))
 
   (define (read-padding!)
     (let ([padding (config-ref 'padding)])
@@ -247,6 +256,7 @@
       ;; at least two columns, so that wide characters always fit
       (let ([cols (max 2 (renderer-cols renderer))] [rows (renderer-rows renderer)])
         (unless (and (= cols (terminal-cols term)) (= rows (terminal-rows term)))
+          (end-hints!)
           (terminal-resize! term rows cols)
           (resize-pty!)))
       (terminal-set-cell-pixel-size! term (font-cell-width font) (font-cell-height font))
@@ -288,6 +298,7 @@
       (let* ([t0 (now-ms)]
              [damage (begin
                        (update-hover!)       ; the text under the pointer may have changed
+                       (when hints (update-hints!))
                        (renderer-render! renderer term focused blink-on highlights
                                          (and search-active (search-overlay))))]
              [t1 (now-ms)])
@@ -385,14 +396,17 @@
 
   ;;; Search -------------------------------------------------------------------------------
 
-  ;; What the renderer highlights in absolute row ABS: search matches and
-  ;; the hovered link.
+  ;; What the renderer highlights in absolute row ABS: search matches, the
+  ;; hovered link and hint labels.
   (define (highlights abs)
-    (let ([s (search-highlights abs)])
-      (if (= hover-link 0)
-          s
-          (append s (map (lambda (r) (list (car r) (cadr r) 'link))
-                         (link-ranges term hover-link abs))))))
+    (let* ([s (search-highlights abs)]
+           [s (if (= hover-link 0)
+                  s
+                  (append s (map (lambda (r) (list (car r) (cadr r) 'link))
+                                 (link-ranges term hover-link abs))))])
+      (if hint-cells
+          (append s (hashtable-ref hint-cells abs '()))
+          s)))
 
   (define (search-highlights abs)
     (if (and search-active (> (string-length search-query) 0))
@@ -453,11 +467,13 @@
       (unless (and (>= view 0) (< view (- rows 1)))
         (terminal-scroll-display! term (- (- (quotient rows 2) row) offset)))))
 
+  ;; not in hint mode
   (define (start-search! backward?)
-    (set! search-active #t)
-    (set! search-backward backward?)
-    (set! search-match #f)
-    (set! need-redraw #t))
+    (unless hints
+      (set! search-active #t)
+      (set! search-backward backward?)
+      (set! search-match #f)
+      (set! need-redraw #t)))
 
   (define (end-search!)
     (set! search-active #f)
@@ -488,6 +504,69 @@
          (set! need-redraw #t)]
         [else (void)])))
 
+  ;;; Keyboard hints -----------------------------------------------------------------------
+  ;;; A key binding starts hint mode for one action: every target on screen
+  ;;; (OSC 8 links and URLs, see hint-targets) gets a label, and typing a
+  ;;; label runs the action on its target.  As in Alacritty, the targets are
+  ;;; found again whenever a frame is drawn, so labels follow output and
+  ;;; scrolling, keeping the keys typed so far; hint mode ends when no
+  ;;; target is left, on Escape, once an action ran, and on a resize.
+
+  (define (hint-alphabet)
+    (let ([a (config-ref 'hint-alphabet)])
+      (if (valid-hint-alphabet? a)
+          a
+          (begin (warn "invalid hint-alphabet ~s: at least two different characters needed" a)
+                 default-hint-alphabet))))
+
+  ;; the targets ACTION can be run on
+  (define (action-targets action)
+    (let ([ts (hint-targets term)])
+      (if (eq? action 'hint-open)
+          (filter (lambda (t) (openable-url? (target-uri t))) ts)
+          ts)))
+
+  (define (start-hints! action)
+    (unless (or search-active hints)
+      (set-hints! (hint-start action (hint-alphabet) (action-targets action)))))
+
+  (define (set-hints! state)
+    (set! hints state)
+    (set! hint-cells (and state (hint-label-cells state (terminal-cols term))))
+    (set! need-redraw #t))
+
+  (define (end-hints!)
+    (when hints (set-hints! #f)))
+
+  ;; before drawing a frame, which the new labels are then part of
+  (define (update-hints!)
+    (set-hints! (hint-update hints (action-targets (hint-state-action hints))))
+    (set! need-redraw #f))
+
+  (define (hint-key-press! ev)
+    (let* ([sym (key-event-sym ev)] [text (key-event-text ev)]
+           [ctrl (logtest (key-event-mods ev) MOD-CTRL)]
+           [key (cond
+                  [(= sym (keysym-by-name "Escape")) 'escape]
+                  [(and ctrl (= (keysym-lower sym) (keysym-by-name "c"))) 'escape]
+                  [(= sym (keysym-by-name "BackSpace")) 'backspace]
+                  [(and (not ctrl) (= (string-length text) 1) (char>? (string-ref text 0) #\space))
+                   (string-ref text 0)]
+                  [else #f])]
+           [action (hint-state-action hints)])
+      (let-values ([(state target) (hint-key hints key)])
+        (unless (eq? state hints) (set-hints! state))
+        (when target (run-hint-action! action target)))))
+
+  (define (run-hint-action! action t)
+    (case action
+      [(hint-open) (spawn-detached (list "xdg-open" (target-uri t)) #f)]
+      [(hint-copy) (window-set-clipboard! win 'clipboard (target-uri t))]
+      [(hint-select)
+       (let ([s (target-start t)] [e (target-end t)])
+         (terminal-set-selection! term (vector 'stream (car s) (cdr s) (car e) (- (cdr e) 1)))
+         (when (config-ref 'copy-on-select) (copy-selection! 'primary)))]))
+
   ;;; Actions ------------------------------------------------------------------------------
 
   (define (run-action! action)
@@ -513,6 +592,7 @@
       [(toggle-fullscreen) (window-toggle-fullscreen! win)]
       [(search-forward) (start-search! #f)]
       [(search-backward) (start-search! #t)]
+      [(hint-open hint-copy hint-select) (start-hints! action)]
       [(quit) (set! quit? #t)]
       [(none) (void)]
       [else
@@ -546,6 +626,7 @@
   ;; Handle a key press or repeat; #t when chezterm consumed it.
   (define (key-press! ev)
     (cond
+      [hints (hint-key-press! ev) #t]
       [search-active (search-key! ev) #t]
       [(find-binding ev) => (lambda (action) (run-action! action) #t)]
       [else (send-key! ev) #f]))
@@ -751,14 +832,18 @@
          (cond
            [(not ev) (set! consumed-keys (cons key consumed-keys))]     ; composing
            [else
-            (when (or (key-press! ev) (key-event-composed? ev))
-              (set! consumed-keys (cons key consumed-keys)))
-            (if (and (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
-                (begin
-                  (set! repeat-key key)
-                  (set! repeat-event (key-event-with-type ev KEY-REPEAT))
-                  (set! repeat-next (+ (now-ms) (window-repeat-delay win))))
-                (set! repeat-key #f))]))]
+            ;; keys typed in hint mode do not repeat: a repeat would reach
+            ;; the program once the key ended hint mode
+            (let ([hint-key? hints])
+              (when (or (key-press! ev) (key-event-composed? ev))
+                (set! consumed-keys (cons key consumed-keys)))
+              (if (and (not hint-key?)
+                       (keyboard-repeats? (window-keyboard win) key) (> (window-repeat-rate win) 0))
+                  (begin
+                    (set! repeat-key key)
+                    (set! repeat-event (key-event-with-type ev KEY-REPEAT))
+                    (set! repeat-next (+ (now-ms) (window-repeat-delay win))))
+                  (set! repeat-key #f)))]))]
       [(key-release)
        (let ([key (car args)])
          (when (eqv? key repeat-key) (set! repeat-key #f))

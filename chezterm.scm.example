@@ -54,6 +54,14 @@
 (copy-on-select #t)              ; selections go to the primary selection
 (word-separators ",│`|:\"' ()[]{}<>\t")
 
+;;; Keyboard hints -----------------------------------------------------------
+;;; hint-open, hint-copy and hint-select (see the key bindings below) label
+;;; every OSC 8 link and URL on screen; typing a label runs the action on
+;;; it, Backspace removes the last key typed, Escape leaves.
+(hint-alphabet "jfkdls;ahgurieowpq") ; label characters: the first half
+                                 ; (rounded down, of all but one) ends a
+                                 ; label, the rest begins longer ones
+
 ;;; Bell ---------------------------------------------------------------------
 (bell-command #f)                ; program run on BEL, e.g.
                                  ; (bell-command "paplay" "/usr/share/sounds/freedesktop/stereo/bell.oga")
@@ -66,6 +74,10 @@
  (cursor "#d8d8d8")
  (selection-foreground #f)       ; #f: keep the text color
  (selection-background "#4f4f4f")
+ (hint-foreground "#181818")     ; hint labels: keys still to type
+ (hint-background "#f4bf75")
+ (hint-typed-foreground "#181818") ; and keys typed
+ (hint-typed-background "#ac4242")
  (normal "#181818" "#ac4242" "#90a959" "#f4bf75"
          "#6a9fb5" "#aa759f" "#75b5aa" "#d8d8d8")
  (bright "#6b6b6b" "#c55555" "#aac474" "#feca88"
@@ -78,7 +90,10 @@
 ;;;   reset-font-size scroll-page-up scroll-page-down scroll-half-page-up
 ;;;   scroll-half-page-down scroll-line-up scroll-line-down scroll-to-top
 ;;;   scroll-to-bottom clear-history clear-selection reset spawn-new-instance
-;;;   toggle-fullscreen search-forward search-backward quit none
+;;;   toggle-fullscreen search-forward search-backward
+;;;   hint-open (open a link or URL with xdg-open; http, https, ftp, file
+;;;   and mailto only), hint-copy (copy its URI to the clipboard),
+;;;   hint-select (select its text)  quit none
 ;;; or a string, which is sent to the program as if typed.
 ;;; Your bindings take precedence over the defaults:
 ;;;   ctrl+shift+c copy            ctrl+shift+v paste
@@ -90,8 +105,10 @@
 ;;;   ctrl+shift+up / down         scroll a line
 ;;;   ctrl+shift+k clear-history   ctrl+shift+n spawn-new-instance
 ;;;   ctrl+shift+f search-forward  ctrl+shift+b search-backward
+;;;   ctrl+shift+o hint-open       ctrl+shift+y hint-copy
 ;;;   f11 toggle-fullscreen
 ;;
 ;; (bind "ctrl+shift+t" spawn-new-instance)
 ;; (bind "ctrl+shift+l" "ls -l\r")
+;; (bind "ctrl+shift+s" hint-select)
 ;; (bind "f11" none)

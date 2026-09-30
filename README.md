@@ -41,6 +41,11 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
   from the program. Holding Ctrl over a link underlines all of it, also
   where it continues on another row.
+- **Keyboard hints**, as in Alacritty: Ctrl+Shift+O labels every link and
+  URL on screen (also scrolled back) with a short key sequence, and typing
+  one opens it; Ctrl+Shift+Y copies it instead, and `hint-select` selects
+  its text. Typed keys narrow the labels down, Backspace takes one back,
+  Escape leaves. Nothing typed in hint mode reaches the program.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
   (CBDT bitmaps scaled to the cell), runtime font size changes.
@@ -208,6 +213,27 @@ not asked for the protocol: media keys, Print, Pause, Scroll Lock and
 F21–F35 as `CSI u` (e.g. `CSI 57428 u` for Play), and Menu as `CSI 29 ~`.
 Every other key is encoded exactly as before.
 
+### Keyboard hints
+
+`hint-open` (Ctrl+Shift+O), `hint-copy` (Ctrl+Shift+Y) and `hint-select`
+(not bound) label every target on screen: each OSC 8 link once, however
+many runs or rows it takes, and every URL found in the text, also where it
+wraps onto the next row. `hint-open` labels only what Ctrl+click would
+open. Labels are made of `hint-alphabet`'s characters, as in Alacritty,
+and no label is a prefix of another: the shortest ones go to the targets
+nearest the bottom of the screen. The keys typed so far are drawn in
+`hint-typed-foreground`/`hint-typed-background`, the rest in
+`hint-foreground`/`hint-background`, and labels that no longer match
+disappear.
+
+As in Alacritty, the labels follow the screen while hint mode is on: when
+output arrives or the view scrolls, the targets are found again and
+labelled anew, keeping the keys typed. Hint mode ends on Escape (or
+Ctrl+C), when a label is complete, when no target is left, and when the
+window is resized. While it is on, key bindings are off and no key reaches
+the program, not even as a release; search cannot start, and hint mode
+cannot start during a search.
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
@@ -260,6 +286,9 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 | Shift+Home / Shift+End | scroll to the top / bottom |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | scroll by a line |
 | Ctrl+Shift+F / Ctrl+Shift+B | search forward / backward (Enter: next, Shift+Enter: previous, Esc: exit) |
+| Ctrl+Shift+O | open a link or URL with keyboard hints (`hint-open`) |
+| Ctrl+Shift+Y | copy a link's or URL's URI with keyboard hints (`hint-copy`) |
+| (not bound) | select a link's or URL's text with keyboard hints (`hint-select`) |
 | Ctrl+Shift+K | clear the scrollback |
 | Ctrl+Shift+N | open a new window in the current directory |
 | F11 | toggle fullscreen |
@@ -312,7 +341,8 @@ Source layout (`src/chezterm/`):
 | `font.ss`, `boxdraw.ss` | fontconfig/FreeType glyphs, built-in box drawing |
 | `render.ss` | incremental software renderer (pixman) |
 | `keyboard.ss` | xkbcommon keymaps, compose, key encoding |
-| `selection.ss` | selection text, word/line bounds, search matches, URLs |
+| `selection.ss` | selection text, word/line bounds, search matches, links and URLs (hint targets) |
+| `hints.ss` | keyboard hint labels and key handling |
 | `pty.ss` | pseudo-terminal and process spawning |
 | `config.ss` | configuration |
 | `app.ss` | event loop and glue |
@@ -330,7 +360,8 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
 - No client-side decorations: without `xdg-decoration` (e.g. on GNOME) the
   window has no title bar.
 - Fractional scaling is rounded to the next integer scale.
-- No Alacritty vi mode, hints UI or IME (`text-input-v3`).
+- No Alacritty vi mode or IME (`text-input-v3`). Keyboard hints find links
+  and URLs only; there are no user-defined regex hints.
 - The kitty keyboard protocol reports Hyper and Meta only when they have a
   modifier of their own; most keymaps share them with Super and Alt.
 

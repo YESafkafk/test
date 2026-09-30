@@ -9,8 +9,8 @@ would go in the code.
 
 Cells keep a link id in the line's `extra` table, and the terminal maps ids
 to URIs. Ctrl+click opens explicit links before URLs found in the text, and
-hovering with Ctrl underlines the whole link. What is left: keyboard hints
-(below) could label explicit links as well.
+hovering with Ctrl underlines the whole link. Keyboard hints (below) label
+explicit links as well.
 
 ### Underline color (SGR 58/59) (done)
 
@@ -80,12 +80,20 @@ left:
   send nothing at all can be sent as `CSI u`. Keys such as Ctrl+Shift+letter
   or modified F13–F20 keep their legacy bytes, which kitty replaces.
 
-### Keyboard hints (Alacritty's "hints")
+### Keyboard hints (Alacritty's "hints") (done)
 
-A mode that labels every URL or regex match on screen with a short key
-sequence, and opens or copies the target when it is typed.
-`selection.ss` already finds URLs. The labels can be drawn through the same
-overlay mechanism as the search prompt.
+`hint-open`, `hint-copy` and `hint-select` label the OSC 8 links and URLs
+on screen (`hint-targets` in `selection.ss`), with Alacritty's labels and
+key handling (`hints.ss`); the renderer draws labels as highlight entries.
+Like Alacritty, the targets are found again on every frame, so labels
+follow output and scrolling. What is left:
+- **User-defined hints.** Alacritty's hints are regexes with an action
+  each (a command, copy, paste, select, move the vi cursor). Chez Scheme
+  has no regex library, so targets come from built-in matchers; more
+  matchers (paths, hashes, IP addresses) could be added to
+  `span-targets` the way URLs are, with a way to choose them per binding.
+- **More actions**: pasting the target, or running a configured command
+  on it instead of `xdg-open`.
 
 ### IME (`zwp_text_input_v3`)
 
