@@ -352,6 +352,63 @@
   (terminal-resize! t 3 3)
   (check "reflow wide" '("ab" "日" "本") (screen t)))
 
+;;; OSC 133 shell integration: marks on the cursor's line, kept through
+;;; the history and reflow
+(define (osc133 x) (esc "]133;" x "\x1b;\\"))
+(define (marks t row) (line-marks-field (grid-line (terminal-grid t) row)))
+
+(let ([t (make-term 6 10)])
+  (feed t (osc133 "A") "$ ls" (osc133 "B") "\r\n" (osc133 "C") "out\r\n" (osc133 "D;0") (osc133 "A;k=s")
+        "> " "\x1b;]133;A;aid=1\x7;" (osc133 "AB") (osc133 "E") (osc133 ""))
+  (check "OSC 133: A, C, D and secondary prompts; B ignored"
+         (list MARK-PROMPT MARK-OUTPUT (fxior MARK-END MARK-SECONDARY-PROMPT MARK-PROMPT) 0)
+         (map (lambda (r) (marks t r)) '(0 1 2 3)))
+  (feed t "\r\n\r\n\r\n\r\n\r\n")
+  (check "OSC 133: marks go into the history" (list MARK-PROMPT MARK-OUTPUT)
+         (list (marks t -2) (marks t -1)))
+  (feed t (osc133 "A") (esc "[2J"))
+  (check "OSC 133: a cleared line loses its mark" 0 (marks t (terminal-cursor-row t)))
+  (feed t (osc133 "A") (esc "[2K"))
+  (check "OSC 133: erasing the text in the line keeps it" MARK-PROMPT (marks t (terminal-cursor-row t))))
+
+(let ([t (make-term 4 10 100)])
+  ;; a prompt wrapped over two rows, a mark on the wrapped part of a line,
+  ;; and a mark on an empty line after the content
+  (feed t (osc133 "A") "0123456789ab\r\n" "xyz01234567" (osc133 "C") "89\r\n" (osc133 "D"))
+  (check "reflow marks: before" (list MARK-PROMPT 0 0 MARK-OUTPUT MARK-END)
+         (map (lambda (r) (marks t r)) '(-1 0 1 2 3)))
+  (terminal-resize! t 4 5)
+  (check "reflow marks: narrower" '("01234" "56789" "ab" "xyz01" "23456" "789" "")
+         (map (lambda (r) (row-text t r)) '(-3 -2 -1 0 1 2 3)))
+  (check "reflow marks: on the lines that hold them, narrower"
+         (list MARK-PROMPT 0 0 0 0 MARK-OUTPUT MARK-END)
+         (map (lambda (r) (marks t r)) '(-3 -2 -1 0 1 2 3)))
+  (terminal-resize! t 4 20)
+  (check "reflow marks: wider" (list MARK-PROMPT (fxior MARK-OUTPUT) MARK-END 0)
+         (map (lambda (r) (marks t r)) '(0 1 2 3))))
+
+;;; jumping between prompts: the line after the view's top is searched
+(let ([t (make-term 3 10 100)])
+  (feed t (osc133 "A") "p1\r\no\r\no\r\n" (osc133 "A") "p2\r\no\r\n" (osc133 "A;k=s") "s\r\n"
+        (osc133 "A") "p3\r\no\r\no\r\no\r\n" (osc133 "A") "p4")
+  ;; rows: p1 -8, p2 -5, s -3, p3 -2, p4 2 (the screen: o o p4)
+  (let ([jump (lambda (dir)
+                (let ([o (prompt-view-offset t dir)])
+                  (when o (terminal-scroll-display! t (- o (terminal-display-offset t))))
+                  (and o (row-text t (- (terminal-display-offset t))))))])
+    (check "prompts: previous" "p3" (jump -1))
+    (check "prompts: previous skips the one at the top and secondary prompts" "p2" (jump -1))
+    (check "prompts: previous again" "p1" (jump -1))
+    (check "prompts: none before the first" #f (jump -1))
+    (check "prompts: the view stays" 8 (terminal-display-offset t))
+    (check "prompts: next" "p2" (jump 1))
+    (check "prompts: next again" "p3" (jump 1))
+    (check "prompts: next on the screen scrolls to the bottom" 0
+           (begin (jump 1) (terminal-display-offset t)))
+    (check "prompts: next at the bottom" 0 (prompt-view-offset t 1))
+    (feed t (esc "[?1049h"))
+    (check "prompts: not on the alternate screen" #f (prompt-view-offset t -1))))
+
 ;;; scrollback view anchoring
 (let ([t (make-term 2 5)])
   (feed t "1\r\n2\r\n3\r\n4")
@@ -842,6 +899,8 @@
            (hashtable-size h)))
   (check "default bindings: hints" '(hint-open hint-copy)
          (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+o" "ctrl+shift+y")))
+  (check "default bindings: prompts, as in kitty and foot" '(scroll-to-previous-prompt scroll-to-next-prompt)
+         (map (lambda (k) (cdr (assoc k (config-ref 'bindings)))) '("ctrl+shift+z" "ctrl+shift+x")))
   (check "default bindings: hint-paste and hint-select not bound" '()
          (filter (lambda (b) (memq (cdr b) '(hint-paste hint-select))) (config-ref 'bindings))))
 

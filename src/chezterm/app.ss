@@ -594,6 +594,8 @@
       [(scroll-line-down) (terminal-scroll-display! term -1)]
       [(scroll-to-top) (terminal-scroll-display! term (grid-hist-count (terminal-grid term)))]
       [(scroll-to-bottom) (terminal-scroll-to-bottom! term)]
+      [(scroll-to-previous-prompt) (scroll-to-prompt! -1)]
+      [(scroll-to-next-prompt) (scroll-to-prompt! 1)]
       [(clear-history) (terminal-clear-history! term)]
       [(clear-selection) (terminal-selection-clear! term)]
       [(reset) (terminal-reset! term)]
@@ -608,6 +610,12 @@
        (cond
          [(string? action) (send! action)]
          [else (warn "unknown action ~s" action)])]))
+
+  ;; Put the previous or next prompt (OSC 133;A) at the top of the view.
+  (define (scroll-to-prompt! dir)
+    (let ([offset (prompt-view-offset term dir)])
+      (when offset
+        (terminal-scroll-display! term (- offset (terminal-display-offset term))))))
 
   ;; Open URI with the open-command, the URI appended as its last argument
   ;; (as Alacritty's hint command).

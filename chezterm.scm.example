@@ -92,7 +92,9 @@
 ;;;   copy paste paste-primary increase-font-size decrease-font-size
 ;;;   reset-font-size scroll-page-up scroll-page-down scroll-half-page-up
 ;;;   scroll-half-page-down scroll-line-up scroll-line-down scroll-to-top
-;;;   scroll-to-bottom clear-history clear-selection reset spawn-new-instance
+;;;   scroll-to-bottom scroll-to-previous-prompt scroll-to-next-prompt
+;;;   (prompts the shell marks with OSC 133;A) clear-history clear-selection
+;;;   reset spawn-new-instance
 ;;;   toggle-fullscreen search-forward search-backward
 ;;;   hint-open (open a link or URL with the open-command; http, https,
 ;;;   ftp, file and mailto only), hint-copy (copy its URI to the
@@ -108,6 +110,7 @@
 ;;;   shift+page_up / page_down    scroll a page
 ;;;   shift+home / shift+end       scroll to top / bottom
 ;;;   ctrl+shift+up / down         scroll a line
+;;;   ctrl+shift+z / ctrl+shift+x  scroll to the previous / next prompt
 ;;;   ctrl+shift+k clear-history   ctrl+shift+n spawn-new-instance
 ;;;   ctrl+shift+f search-forward  ctrl+shift+b search-backward
 ;;;   ctrl+shift+o hint-open       ctrl+shift+y hint-copy

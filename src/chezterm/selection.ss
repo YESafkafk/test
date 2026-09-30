@@ -4,7 +4,7 @@
   (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
           line-text line-matches url-at text-url-at link-id-at link-ranges openable-url? uri-to-open
           target? target-uri target-start target-end target-label target-link
-          hint-targets text-url-target-at target-ranges)
+          hint-targets text-url-target-at target-ranges prompt-view-offset)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
 
   (define (line-at-abs term abs)
@@ -392,5 +392,25 @@
       (if (<= (car s) abs (car e))
           (list (list (if (= abs (car s)) (cdr s) 0) (if (= abs (car e)) (cdr e) cols)))
           '())))
+
+;;; Shell integration: jumping between prompts ----------------------------
+
+  ;; The display offset that puts the previous (DIR -1) or next (DIR 1)
+  ;; prompt at the top of the view, or #f when there is none, as kitty's
+  ;; scroll_to_prompt and foot's prompt-prev / prompt-next do: prompts are
+  ;; lines marked by OSC 133;A (not secondary prompts), searched from the
+  ;; line after the view's top line, so the prompt at the top is skipped.
+  ;; A next prompt on the screen scrolls to the bottom.  Only the primary
+  ;; screen has prompts to jump to.
+  (define (prompt-view-offset term dir)
+    (and (not (terminal-alt-screen? term))
+         (let* ([g (terminal-grid term)]
+                [first (- (grid-hist-count g))]
+                [last (- (grid-rows g) 1)])
+           (let loop ([row (+ (- (terminal-display-offset term)) dir)])
+             (cond
+               [(or (< row first) (> row last)) #f]
+               [(fxlogtest (line-marks-field (grid-line g row)) MARK-PROMPT) (max 0 (- row))]
+               [else (loop (+ row dir))])))))
 
 )

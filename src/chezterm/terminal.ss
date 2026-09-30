@@ -1261,12 +1261,29 @@
              (when slash
                (terminal-cwd-set! t (percent-decode (substring p slash (string-length p)))))))]
         [(8) (osc-hyperlink! t rest)]
+        [(133) (shell-mark! t rest)]
         [(52)
          (let ([parts (string-split rest #\;)])
            (when (and (fx= 2 (length parts)) (not (string=? (cadr parts) "?")))
              (let ([data (base64-decode (cadr parts))])
                (when data ((terminal-on-clipboard t) (utf8->string data))))))]
         [else (void)])))
+
+  ;;; OSC 133 shell integration ----------------------------------------------
+  ;;; OSC 133 ; A|C|D [; options] ST marks the line the cursor is on (see
+  ;;; MARK-PROMPT in grid.ss).  As in kitty, an A with the option k=s starts
+  ;;; a secondary prompt.  B (the end of the prompt), the other options and
+  ;;; D's exit status are ignored, as kitty and foot do.
+
+  (define (shell-mark! t rest)
+    (let ([opts (string-split rest #\;)])
+      (when (fx= 1 (string-length (car opts)))
+        (let ([m (case (string-ref rest 0)
+                   [(#\A) (if (member "k=s" (cdr opts)) MARK-SECONDARY-PROMPT MARK-PROMPT)]
+                   [(#\C) MARK-OUTPUT]
+                   [(#\D) MARK-END]
+                   [else 0])])
+          (unless (fx= m 0) (line-add-marks! (cur-line t) m))))))
 
   ;;; OSC 8 hyperlinks --------------------------------------------------------
   ;;; OSC 8 ; params ; URI ST starts a link that the following characters get,

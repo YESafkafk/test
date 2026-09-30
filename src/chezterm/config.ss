@@ -85,6 +85,8 @@
           ("shift+end" . scroll-to-bottom)
           ("ctrl+shift+up" . scroll-line-up)
           ("ctrl+shift+down" . scroll-line-down)
+          ("ctrl+shift+z" . scroll-to-previous-prompt)
+          ("ctrl+shift+x" . scroll-to-next-prompt)
           ("ctrl+shift+k" . clear-history)
           ("ctrl+shift+n" . spawn-new-instance)
           ("ctrl+shift+f" . search-forward)

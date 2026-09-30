@@ -20,6 +20,20 @@ so printing costs nothing extra and blank cells stay all zeros (the line's
 `extra` table made `parse/sgr` 40% slower). `draw-underline!` draws every
 style in it, and the terminfo entries advertise `Setulc`.
 
+### Shell integration (OSC 133) (done)
+
+Lines keep the OSC 133 marks printed on them (A, secondary prompts, C and
+D) in a fixnum field of the line record, which is 0 for most lines and
+reset when a line is cleared, so printing costs nothing extra. Reflow
+moves a mark to the line that holds the start of its old line. The
+`scroll-to-previous-prompt` and `scroll-to-next-prompt` actions use the A
+marks, as kitty's `scroll_to_prompt` and foot's `prompt-prev`/`prompt-next`.
+What is left:
+- **Selecting or copying a command's output**, from its C mark to the next
+  prompt (kitty's `show_last_command_output`, foot's `pipe-command-output`).
+- **Clicking in the command line to move the cursor**, which kitty offers
+  with `A;click_events=1`.
+
 ### Performance findings from the benchmarks
 
 [BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with

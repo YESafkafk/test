@@ -12,7 +12,8 @@
 ;;; color (SGR 58) plus one, or 0 for none: see ul-field and cell-ul-color.
 ;;; What does not fit into the fxvector is kept in a per-line table, the
 ;;; line's extras, mapping a column to a cell extra (see below): combining
-;;; characters and a hyperlink.
+;;; characters and a hyperlink.  A line's marks record the shell
+;;; integration marks (OSC 133) printed on it, see MARK-PROMPT.
 (library (chezterm grid)
   (export ATTR-BOLD ATTR-DIM ATTR-ITALIC ATTR-UNDERLINE-MASK ATTR-UNDERLINE-SHIFT
           ATTR-BLINK ATTR-REVERSE ATTR-HIDDEN ATTR-STRIKE ATTR-WIDE ATTR-SPACER
@@ -21,6 +22,8 @@
           cell-ch cell-attrs cell-fg cell-bg cell-ul-color cell-set! cell-copy! cell-empty?
           fg-field bg-field ul-field
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
+          line-marks-field line-marks-field-set! line-add-marks!
+          MARK-PROMPT MARK-SECONDARY-PROMPT MARK-OUTPUT MARK-END
           line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
           make-extra extra-marks extra-link
           line-marks line-link line-ul-color line-extra-put! line-extra-fill! line-add-mark!
@@ -140,12 +143,26 @@
 
   ;;; Lines ---------------------------------------------------------------
 
+  ;; Shell integration marks (OSC 133), bits of a line's marks, as kitty and
+  ;; foot record them: a prompt starts on the line (A), a secondary prompt
+  ;; such as a continuation line's starts on it (A with k=s, kitty), the
+  ;; command's output starts (C), the command ended (D).  They stay with
+  ;; the line the cursor was on, into the history and through reflow.
+  (define MARK-PROMPT 1)
+  (define MARK-SECONDARY-PROMPT 2)
+  (define MARK-OUTPUT 4)
+  (define MARK-END 8)
+
   (define-record-type line
-    (fields (mutable cells) (mutable wrapped) (mutable extra))
+    (fields (mutable cells) (mutable wrapped) (mutable extra)
+            (mutable marks-field))    ; shell integration marks, 0 for none
     (protocol
      (lambda (new)
        (lambda (cols)
-         (new (make-fxvector (fx* 3 cols) 0) #f #f)))))
+         (new (make-fxvector (fx* 3 cols) 0) #f #f 0)))))
+
+  (define (line-add-marks! l m)
+    (line-marks-field-set! l (fxior (line-marks-field l) m)))
 
   (define (line-cols l) (fxquotient (fxvector-length (line-cells l)) 3))
 
@@ -176,13 +193,15 @@
   (define (line-clear! l bg)
     (line-extra-set! l #f)
     (line-fill! l 0 (line-cols l) bg)
-    (line-wrapped-set! l #f))
+    (line-wrapped-set! l #f)
+    (line-marks-field-set! l 0))
 
   (define (line-copy l)
     (let ([n (make-line 0)])
       (line-cells-set! n (fxvector-copy (line-cells l)))
       (line-wrapped-set! n (line-wrapped l))
       (line-extra-set! n (and (line-extra l) (hashtable-copy (line-extra l) #t)))
+      (line-marks-field-set! n (line-marks-field l))
       n))
 
   ;; Number of columns up to and including the last non-blank cell.
@@ -301,13 +320,18 @@
         [else (loop (cdr ls) '() (cons (reverse (cons (car ls) cur)) acc))])))
 
   (define (join-logical group)
-    ;; returns (values cells extras length) where length excludes trailing blanks
+    ;; returns (values cells extras length marks) where length excludes
+    ;; trailing blanks and marks is an alist (offset . marks) of the lines
+    ;; with marks, by the offset they start at, in order
     (let* ([total (apply fx+ (map line-cols group))]
            [v (make-fxvector (fx* 3 total) 0)]
-           [extras '()])
+           [extras '()]
+           [marks '()])
       (let loop ([ls group] [off 0])
         (unless (null? ls)
           (let* ([l (car ls)] [c (line-cols l)] [src (line-cells l)])
+            (unless (fx= 0 (line-marks-field l))
+              (set! marks (cons (cons off (line-marks-field l)) marks)))
             ;; a wrapped line may end in a padding cell left before a wide
             ;; character that did not fit; those are marked as spacers.
             (do ([i 0 (fx+ i 1)]) ((fx= i (fx* 3 c)))
@@ -322,11 +346,12 @@
                      [(fx< i 0) 0]
                      [(and (cell-empty? v i) (fx= (cell-bg v i) COLOR-BG)) (trim (fx- i 1))]
                      [else (fx+ i 1)]))])
-        (values v extras len))))
+        (values v extras len (reverse marks)))))
 
-  ;; Split a logical line into physical lines of COLS columns.  Returns the
-  ;; list of lines and a vector mapping logical offsets to (row . col).
-  (define (split-logical v extras len cols want-offset)
+  ;; Split a logical line into physical lines of COLS columns.  MARKS (from
+  ;; join-logical) go to the line that holds their offset, or the last line
+  ;; when the offset is past the content.
+  (define (split-logical v extras len cols want-offset marks)
     ;; returns (values lines cursor-pos) where cursor-pos is (row . col) of
     ;; want-offset (or #f)
     (let loop ([i 0] [lines '()] [cur (make-line cols)] [col 0] [pos #f])
@@ -335,6 +360,7 @@
                      pos)])
         (cond
           [(fx>= i len)
+           (for-each (lambda (m) (line-add-marks! cur (cdr m))) marks)
            (let* ([lines (reverse (cons cur lines))]
                   [pos (or pos
                            (and want-offset
@@ -363,6 +389,11 @@
                 (line-wrapped-set! cur #t)
                 (loop i (cons cur lines) (make-line cols) 0 pos)]
                [else
+                (let apply-marks ()
+                  (when (and (pair? marks) (fx<= (caar marks) i))
+                    (line-add-marks! cur (cdar marks))
+                    (set! marks (cdr marks))
+                    (apply-marks)))
                 (cell-copy! v i (line-cells cur) col)
                 (when (and (fx= w 1) (fxlogtest attrs ATTR-WIDE))
                   (let ([c (line-cells cur)] [k (fx* 3 col)])
@@ -391,6 +422,7 @@
             (vector-for-each (lambda (k s) (when (fx< k cols) (hashtable-set! ex k s))) ks vs))
           (line-extra-set! n ex)))
       (line-wrapped-set! n (and (fx>= cols old) (line-wrapped l)))
+      (line-marks-field-set! n (line-marks-field l))
       n))
 
   ;; Resize to ROWS x COLS.  When REFLOW? is true, wrapped lines are rejoined
@@ -447,8 +479,8 @@
                          (cond [(null? ls) #f]
                                [(eq? (car ls) cursor-line) (fx+ off ccol)]
                                [else (find (cdr ls) (fx+ off (line-cols (car ls))))]))])
-              (let-values ([(v extras len) (join-logical group)])
-                (let-values ([(new pos) (split-logical v extras len cols ci)])
+              (let-values ([(v extras len marks) (join-logical group)])
+                (let-values ([(new pos) (split-logical v extras len cols ci marks)])
                   (loop (cdr gs)
                         (append (reverse new) out)
                         (or cpos (and pos (cons (fx+ (length out) (car pos)) (cdr pos))))))))))))

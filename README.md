@@ -25,7 +25,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 8 hyperlinks, OSC 52 clipboard (write only)
+    OSC 8 hyperlinks, OSC 52 clipboard (write only), OSC 133 shell integration marks
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
 - **Scrollback** (configurable size), which stays in place while new output
@@ -34,6 +34,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   and block (Ctrl+drag) selection, extending with right click, and autoscroll while dragging.
 - **Clipboard** (`wl_data_device`) and **primary selection**
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
+- **Jumping between prompts** (Ctrl+Shift+Z / Ctrl+Shift+X) that the shell
+  marks with OSC 133, as in kitty and foot; see [Shell integration](#shell-integration).
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
 - **Ctrl+click on links and URLs** opens them with the `open-command`
@@ -253,6 +255,23 @@ window is resized. While it is on, key bindings are off and no key reaches
 the program, not even as a release; search cannot start, and hint mode
 cannot start during a search.
 
+### Shell integration
+
+A shell can mark where its prompts start with OSC 133, as kitty and foot
+understand it: `OSC 133 ; A ST` before the prompt, `C` where the command's
+output starts and `D` when the command has ended (`B`, the end of the
+prompt, is ignored, as in kitty and foot). Marks stay with their lines in
+the scrollback, also when lines are reflowed. `scroll-to-previous-prompt`
+(Ctrl+Shift+Z) and `scroll-to-next-prompt` (Ctrl+Shift+X), kitty's and
+foot's default keys, put the previous or next prompt at the top of the
+window; the prompt already at the top is skipped, and so are secondary
+prompts (`A` with `k=s`, as in kitty). In bash, for example:
+
+```sh
+PS1='\[\e]133;A\e\\\]'$PS1
+PS0='\e]133;C\e\\'
+```
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
@@ -304,6 +323,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 | Shift+PageUp / Shift+PageDown | scroll by a page |
 | Shift+Home / Shift+End | scroll to the top / bottom |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | scroll by a line |
+| Ctrl+Shift+Z / Ctrl+Shift+X | scroll to the previous / next prompt (OSC 133) |
 | Ctrl+Shift+F / Ctrl+Shift+B | search forward / backward (Enter: next, Shift+Enter: previous, Esc: exit) |
 | Ctrl+Shift+O | open a link or URL with keyboard hints (`hint-open`) |
 | Ctrl+Shift+Y | copy a link's or URL's URI with keyboard hints (`hint-copy`) |
