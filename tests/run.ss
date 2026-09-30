@@ -1,7 +1,7 @@
 ;;; Test runner: scheme --libdirs src --script tests/run.ss
 (import (chezscheme) (chezterm grid) (chezterm terminal) (chezterm charwidth)
         (chezterm font) (chezterm render) (chezterm selection) (chezterm keyboard)
-        (chezterm termenv) (only (chezterm config) config-ref)
+        (chezterm termenv) (chezterm hints) (only (chezterm config) config-ref)
         (only (chezterm ffi) xkb_keysym_from_name xkb_keysym_to_utf32))
 
 (define failures 0)
@@ -818,6 +818,81 @@
          (targets t))
   (check "text-url-at: second half of a wide character" "https://例え.jp/パス"
          (text-url-at t (cons (terminal-abs-row t 0) 24))))
+
+;;; hint labels
+(check "hint labels: Alacritty's sequence"
+       '("0" "1" "20" "21" "30" "31" "220" "221" "230" "231" "320" "321" "330" "331"
+         "2220" "2221" "2230" "2231" "2320" "2321" "2330" "2331" "3220" "3221" "3230" "3231"
+         "3320" "3321" "3330" "3331")
+       (hint-labels "0123" 30))
+(check "hint labels: default alphabet"
+       '("j" "f" "k" "d" "l" "s" ";" "a" "h" "gj" "gf" "gk")
+       (hint-labels default-hint-alphabet 12))
+(let ([ls (hint-labels default-hint-alphabet 800)])
+  (check "hint labels: prefix-free" #t
+         (for-all (lambda (a)
+                    (for-all (lambda (b)
+                               (or (eq? a b) (not (and (<= (string-length a) (string-length b))
+                                                       (string=? a (substring b 0 (string-length a)))))))
+                             ls))
+                  ls))
+  (check "hint labels: all different" 800
+         (let ([h (make-hashtable string-hash string=?)]) (for-each (lambda (l) (hashtable-set! h l #t)) ls) (hashtable-size h)))
+  (check "hint labels: shortest first" #t
+         (let loop ([ls ls]) (or (null? (cdr ls)) (and (<= (string-length (car ls)) (string-length (cadr ls))) (loop (cdr ls))))))
+  (check "hint labels: 9 of one key, 81 of two" '(9 81 710)
+         (map (lambda (n) (length (filter (lambda (l) (= n (string-length l))) ls))) '(1 2 3))))
+(check "hint alphabet: valid" '(#t #f #f #f #t)
+       (map valid-hint-alphabet? (list default-hint-alphabet "a" "aba" 'x "ab")))
+
+;;; hint mode: labels, typing, Backspace and Escape
+(let* ([t (make-term 12 20)]
+       [_ (for-each (lambda (i) (feed t (format "http://~a/~a" i (if (< i 11) "\r\n" "")))) (iota 12))]
+       [targets (hint-targets t)]
+       [s (hint-start 'hint-copy default-hint-alphabet targets)]
+       [uri (lambda (x) (and x (target-uri x)))]
+       [labels (lambda (s) (map (lambda (v) (cons (target-uri (car v)) (cdr v))) (hint-visible s)))]
+       [key (lambda (s . keys)
+              (let loop ([s s] [keys keys])
+                (let-values ([(s2 picked) (hint-key s (car keys))])
+                  (if (null? (cdr keys)) (list (and s2 (hint-state-typed s2)) (uri picked)) (loop s2 (cdr keys))))))]
+       [after (lambda (s . keys)
+                (let loop ([s s] [keys keys])
+                  (if (null? keys) s (let-values ([(s2 p) (hint-key s (car keys))]) (loop s2 (cdr keys))))))])
+  (check "hint mode: no targets" #f (hint-start 'hint-open default-hint-alphabet '()))
+  (check "hint mode: shortest labels at the bottom"
+         '(("http://0/" . "gk") ("http://1/" . "gf") ("http://2/" . "gj") ("http://3/" . "h") ("http://4/" . "a")
+           ("http://5/" . ";") ("http://6/" . "s") ("http://7/" . "l") ("http://8/" . "d") ("http://9/" . "k")
+           ("http://10/" . "f") ("http://11/" . "j"))
+         (labels s))
+  (check "hint mode: one key picks" '(#f "http://11/") (key s #\j))
+  (check "hint mode: first key of two" '("g" #f) (key s #\g))
+  (check "hint mode: typed keys filter"
+         '(("http://0/" . "gk") ("http://1/" . "gf") ("http://2/" . "gj")) (labels (after s #\g)))
+  (check "hint mode: second key picks" '(#f "http://1/") (key s #\g #\f))
+  (check "hint mode: a key no label continues with is ignored" '("g" #f) (key s #\g #\x))
+  (check "hint mode: unknown first key" '("" #f) (key s #\z))
+  (check "hint mode: Backspace" '("" #f) (key s #\g 'backspace))
+  (check "hint mode: Backspace with nothing typed" '("" #f) (key s 'backspace))
+  (check "hint mode: Backspace, then another label" '(#f "http://11/") (key s #\g 'backspace #\j))
+  (check "hint mode: Escape" '(#f #f) (key s #\g 'escape))
+  (check "hint mode: other keys ignored" '("g" #f) (key s #\g 'left))
+  (check "hint mode: case matters" '("" #f) (key s #\J))
+  (check "hint mode: update keeps the typed keys" "g"
+         (hint-state-typed (hint-update (after s #\g) targets)))
+  (check "hint mode: update without targets ends it" #f (hint-update s '()))
+  (check "hint label cells: typed part"
+         '((0 2 "gk" 1))
+         (hashtable-ref (hint-label-cells (after s #\g) 20) (terminal-abs-row t 0) #f))
+  (check "hint label cells: filtered out" #f
+         (hashtable-ref (hint-label-cells (after s #\g) 20) (terminal-abs-row t 3) #f)))
+;; a label at the right edge continues on the next row
+(let* ([t (make-term 3 10)])
+  (feed t "123456789" (osc8 "" "http://x/") "abcd" (osc8 "" "") " http://y/")
+  (let ([cells (hint-label-cells (hint-start 'hint-copy "ab" (hint-targets t)) 10)])
+    (check "hint label cells: at the right edge"
+           '(((9 10 "b" 0)) ((0 1 "a" 0) (4 5 "a" 0)))
+           (map (lambda (r) (hashtable-ref cells (terminal-abs-row t r) #f)) '(0 1)))))
 
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
