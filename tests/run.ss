@@ -1837,6 +1837,51 @@
       (renderer-render! r t #t #t (lambda (a) '()) #f)
       (check "hover ends = fresh" #t (equal? (snapshot r) before)))
     (renderer-free! r))
+  ;; hint labels are drawn over the cells, in the hint colors: labels
+  ;; appearing, filtered as keys are typed, over wide characters, at the
+  ;; right edge, and gone again
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [pixel (lambda (row col) (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                               (* 4 (+ 3 (* col cw) (* (+ 3 (* row chh)) (renderer-width r))))))]
+         [rows (lambda (alist) (lambda (a) (let ([e (assv (terminal-rel-row t a) alist)]) (if e (cdr e) '()))))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))]
+         [labels (rows '((0 . ((0 2 "gk" 0) (6 7 "h" 0))) (1 . ((19 20 "g" 0))) (2 . ((0 1 "f" 0)))
+                         (3 . ((2 4 "j;" 0)))))]
+         [typed (rows '((0 . ((0 2 "gk" 1))) (1 . ((19 20 "g" 1))) (2 . ((0 1 "f" 0)))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t "row 0 日本語 text\r\n" (esc "[44m") "0123456789012345678" (esc "[0m") "日本\r\n"
+          (esc "[4m") "underlined" (esc "[0m") "\r\n日本語")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let ([before (snapshot r)])
+      (renderer-render! r t #t #t labels #f)
+      (check "hint labels = fresh" #t (equal? (snapshot r) (fresh labels)))
+      (check "hint labels drawn" #f (equal? (snapshot r) before))
+      (check "hint label colors" '(#xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75 #xFFF4BF75)
+             (map (lambda (p) (pixel (car p) (cdr p))) '((0 . 0) (0 . 1) (0 . 6) (1 . 19) (2 . 0))))
+      (check "hint label covers the second half of a wide character" #xFFF4BF75 (pixel 0 7))
+      (check "hint label next to it untouched" (pixel 0 8)
+             (let ([s (fresh (lambda (a) '()))]) (bytevector-u32-native-ref s (* 4 (+ 3 (* 8 cw) (* 3 (renderer-width r)))))))
+      (renderer-render! r t #t #t typed #f)
+      (check "hint labels typed = fresh" #t (equal? (snapshot r) (fresh typed)))
+      (check "hint label typed colors" '(#xFFAC4242 #xFFF4BF75 #xFFAC4242)
+             (map (lambda (p) (pixel (car p) (cdr p))) '((0 . 0) (0 . 1) (1 . 19))))
+      (check "hint label filtered out" (bytevector-u32-native-ref before (* 4 (+ 3 (* 6 cw) (* 3 (renderer-width r)))))
+             (pixel 0 6))
+      (feed t "\r\nmore\r\nmore\r\nmore")
+      (renderer-render! r t #t #t typed #f)
+      (check "hint labels scrolled = fresh" #t (equal? (snapshot r) (fresh typed)))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "hint labels gone = fresh" #t (equal? (snapshot r) (fresh (lambda (a) '()))))
+      (renderer-set-hint-colors! r #xFFFFFF #x0000FF #x000000 #x00FF00)
+      (renderer-render! r t #t #t labels #f)
+      (check "hint colors option" #xFF0000FF (pixel 0 0)))
+    (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal
   (let ([t (make-term 4 15)])
