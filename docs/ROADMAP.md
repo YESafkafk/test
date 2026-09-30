@@ -23,8 +23,10 @@ to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
 
 [BENCHMARKS.md](BENCHMARKS.md#what-the-numbers-show) describes these, with
 measurements:
-- the ASCII tile cache thrashes on multicolored text
-- Unicode text parses 3–4× slower than ASCII
+- parsing is 25–50% slower since everything is compiled at
+  `optimize-level 2`, so the parser's hot loops are the place to win it back
+  without dropping the checks
+- Unicode text parses about 2.5× slower than ASCII
 - rendering during streaming output halves pipeline throughput at large sizes.
 
 Check each change with `make bench-ab BASE=main`.

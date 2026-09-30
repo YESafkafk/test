@@ -294,10 +294,11 @@ Source layout (`src/chezterm/`):
 | `app.ss` | event loop and glue |
 
 Everything is compiled with Chez's `optimize-level 2`, which keeps run-time
-type and bounds checks. On a pty they process output as fast as the pty delivers it
-(`seq 1 2000000` takes about 1 s, the same as `script` writing to `/dev/null`).
-Redrawing a full 250×75 screen of colored text (2254×1354 pixels) takes about
-6 ms.
+type and bounds checks, so a bug raises an error instead of corrupting
+memory. `seq 1 2000000` takes about 3 s in chezterm, against 1 s for
+`script` writing to `/dev/null`. Redrawing a full 250×75 screen of colored
+text (2254×1354 pixels) takes about 6.5 ms. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) for measurements.
 
 ## Limitations
 

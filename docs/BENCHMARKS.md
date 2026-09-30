@@ -130,49 +130,56 @@ On the reference machine:
 
 ## Reference results
 
-These numbers come from `nix run .#bench` at `19bfc05` (plus these changes)
-with Chez Scheme 10.4.1, on a 4-vCPU cloud VM (Intel Xeon @ 2.80GHz), with
-a 9×18 cell. They are only comparable to runs on the same machine. Use
-them to see where time goes, not as targets.
+These numbers come from `nix run .#bench` at `7440867`, with every library
+compiled at `optimize-level 2`, using Chez Scheme 10.4.1 on a 4-vCPU cloud
+VM (Intel Xeon @ 2.80GHz) with a 9×18 cell. They are only comparable to runs
+on the same machine. Use them to see where time goes, not as targets.
 
 | Benchmark | Median | Unit | ±% |
 | --- | ---: | --- | ---: |
-| `parse/ascii` | 46.69 | MB/s | 7.9 |
-| `parse/unicode` | 12.58 | MB/s | 6.5 |
-| `parse/sgr` | 39.19 | MB/s | 7.2 |
-| `parse/cursor` | 78.07 | MB/s | 2.3 |
-| `parse/scroll-region` | 50.95 | MB/s | 0.2 |
-| `parse/alt-screen` | 194.83 | MB/s | 1.3 |
-| `render/full-80x24` | 0.81 | ms/frame | 1.8 |
-| `render/rows-80x24` | 0.86 | ms/frame | 2.5 |
-| `render/scroll-80x24` | 0.08 | ms/frame | 2.1 |
-| `render/cell-80x24` | 0.03 | ms/frame | 1.6 |
-| `render/full-250x75` | 10.79 | ms/frame | 2.5 |
-| `render/rows-250x75` | 10.30 | ms/frame | 1.2 |
-| `render/scroll-250x75` | 0.80 | ms/frame | 0.5 |
-| `render/cell-250x75` | 0.20 | ms/frame | 2.4 |
-| `render/full-426x120` | 32.14 | ms/frame | 2.4 |
-| `render/rows-426x120` | 29.57 | ms/frame | 3.1 |
-| `render/scroll-426x120` | 3.94 | ms/frame | 3.0 |
-| `render/cell-426x120` | 0.48 | ms/frame | 8.9 |
-| `pipeline/ascii` | 27.18 | MB/s | 8.8 |
-| `pipeline/sgr` | 14.10 | MB/s | 6.0 |
-| `pipeline/unicode` | 7.72 | MB/s | 2.2 |
+| `parse/ascii` | 30.15 | MB/s | 10.3 |
+| `parse/unicode` | 11.73 | MB/s | 5.0 |
+| `parse/sgr` | 29.82 | MB/s | 1.6 |
+| `parse/cursor` | 39.49 | MB/s | 2.4 |
+| `parse/scroll-region` | 23.77 | MB/s | 8.7 |
+| `parse/alt-screen` | 99.81 | MB/s | 0.5 |
+| `render/full-80x24` | 0.51 | ms/frame | 4.8 |
+| `render/rows-80x24` | 0.49 | ms/frame | 6.4 |
+| `render/scroll-80x24` | 0.09 | ms/frame | 18.5 |
+| `render/cell-80x24` | 0.05 | ms/frame | 0.6 |
+| `render/full-250x75` | 6.51 | ms/frame | 2.3 |
+| `render/rows-250x75` | 5.86 | ms/frame | 1.9 |
+| `render/scroll-250x75` | 0.76 | ms/frame | 1.0 |
+| `render/cell-250x75` | 0.23 | ms/frame | 4.3 |
+| `render/full-426x120` | 21.77 | ms/frame | 3.9 |
+| `render/rows-426x120` | 16.79 | ms/frame | 3.6 |
+| `render/scroll-426x120` | 3.87 | ms/frame | 10.1 |
+| `render/cell-426x120` | 0.52 | ms/frame | 1.5 |
+| `pipeline/ascii` | 15.01 | MB/s | 16.6 |
+| `pipeline/sgr` | 13.16 | MB/s | 10.9 |
+| `pipeline/unicode` | 7.11 | MB/s | 6.9 |
 
 ### What the numbers show
 
-- **Multicolored text defeats the ASCII tile cache.** The renderer keeps one
-  tile per ASCII character and style, for a single color pair. With an
-  8-color palette and background changes, most lookups miss and fall back to
-  the hashtables. An interleaved A/B with that cache disabled was not slower;
-  the larger sizes trended 6–10% faster, though below significance. A cache
-  with several entries per character, or keyed by color, would help. So would
-  dropping it.
-- **Unicode text parses 3–4× slower than ASCII** (12.6 against 46.7 MB/s).
+- **Compiling at `optimize-level 2` costs parsing speed.** `optimize-level 3`
+  drops the run-time type and bounds checks. Against the earlier level-3
+  build, parsing got slower by:
+  - 7% for `unicode`
+  - 24% for `sgr`
+  - 36–53% for the rest (`parse/ascii` 46.7 → 30.1 MB/s, `parse/cursor`
+    78.1 → 39.5).
+
+  chezterm keeps level 2 everywhere: an indexing bug should raise an error,
+  not corrupt memory.
+- **The tile cache.** The earlier one-entry-per-character ASCII cache missed
+  on most cells of multicolored text. Commit `63f0304` replaced it with a
+  single hashtable. Together with the change to level 2, a full 250×75
+  redraw went from 10.8 to 6.5 ms, so rendering got faster overall.
+- **Unicode text parses about 2.5× slower than ASCII** (11.7 against 30.1 MB/s).
   Each non-ASCII character goes through the general per-code-point path, and
   combining marks through a per-line hashtable.
 - **In the pipeline, rendering competes with parsing.** At 250×75, a frame in
-  which everything changed takes about 10 ms of every 16.7 ms, so `ascii`
-  reaches 27 MB/s through the pty against 47 MB/s parse-only. Skipping frames
-  while output is streaming would raise throughput, at the cost of fewer
-  intermediate frames.
+  which everything changed takes about 6 ms of every 16.7 ms. As a result,
+  `ascii` reaches 15 MB/s through the pty against 30.1 MB/s parse-only.
+  Skipping frames while output is streaming would raise throughput, at the
+  cost of fewer intermediate frames.
