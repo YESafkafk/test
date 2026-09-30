@@ -2,7 +2,7 @@
 ;;; search matches and URLs.  Rows are absolute (see terminal-abs-row).
 (library (chezterm selection)
   (export line-at-abs cell-char word-bounds logical-line-bounds selection-text
-          line-text line-matches url-at)
+          line-text line-matches url-at link-id-at link-ranges openable-url?)
   (import (chezscheme) (chezterm grid) (chezterm terminal))
 
   (define (line-at-abs term abs)
@@ -85,7 +85,7 @@
         (unless (fxlogtest (cell-attrs v i) ATTR-SPACER)
           (let ([c (cell-ch v i)])
             (write-char (if (= c 0) #\space (integer->char c)) out)
-            (let ([marks (and ex (hashtable-ref ex i #f))])
+            (let ([marks (and ex (line-marks l i))])
               (when marks (put-string out marks))))))
       (get-output-string out)))
 
@@ -122,8 +122,52 @@
                         (loop (+ i m) (cons (list c0 c1) acc)))
                       (loop (+ i 1) acc))))))))
 
-  ;; URL under the pointer (for ctrl+click)
+  ;; The id of the OSC 8 link at PT ((abs . col)), or 0.  The second half of
+  ;; a wide character has the first half's link.
+  (define (link-id-at term pt)
+    (let ([l (line-at-abs term (car pt))] [col (cdr pt)])
+      (if (and l (< -1 col (line-cols l)))
+          (line-link l (if (and (> col 0) (fxlogtest (cell-attrs (line-cells l) col) ATTR-SPACER))
+                           (- col 1)
+                           col))
+          0)))
+
+  ;; Column ranges ((c0 c1) ...), end exclusive, of the cells of absolute
+  ;; row ABS that belong to link ID.
+  (define (link-ranges term id abs)
+    (let ([l (line-at-abs term abs)])
+      (if (or (not l) (not (line-extra l)) (= id 0))
+          '()
+          (let ([v (line-cells l)] [cols (line-cols l)])
+            (let loop ([i 0] [start #f] [acc '()])
+              (let ([in (and (< i cols)
+                             (= id (line-link l (if (and (> i 0) (fxlogtest (cell-attrs v i) ATTR-SPACER))
+                                                    (- i 1)
+                                                    i))))])
+                (cond
+                  [(= i cols) (reverse (if start (cons (list start i) acc) acc))]
+                  [(and in (not start)) (loop (+ i 1) i acc)]
+                  [(and (not in) start) (loop (+ i 1) #f (cons (list start i) acc))]
+                  [else (loop (+ i 1) start acc)])))))))
+
+  ;; Only these schemes are opened: an OSC 8 link's URI comes from whatever
+  ;; runs in the terminal.
+  (define (openable-url? u)
+    (let ([colon (let loop ([i 0])
+                   (cond [(= i (string-length u)) #f]
+                         [(char=? (string-ref u i) #\:) i]
+                         [else (loop (+ i 1))]))])
+      (and colon
+           (member (string-downcase (substring u 0 colon)) '("http" "https" "ftp" "file" "mailto"))
+           #t)))
+
+  ;; URL at PT (for ctrl+click): the OSC 8 link there, or else a URL found
+  ;; in the text
   (define (url-at term pt)
+    (or (terminal-link-uri term (link-id-at term pt))
+        (text-url-at term pt)))
+
+  (define (text-url-at term pt)
     (let ([l (line-at-abs term (car pt))])
       (and l
            (let* ([cols (line-cols l)]

@@ -6,9 +6,11 @@
 ;;;   configure width height      new logical size (0 = choose)
 ;;;   close                       the compositor asked us to close
 ;;;   scale n                     integer output scale changed
-;;;   focus bool                  keyboard focus
+;;;   focus bool held             keyboard focus; HELD lists the evdev keycodes
+;;;                               held when it arrives ('() when it leaves)
 ;;;   key-press key-event keycode  (key-event #f while composing)
 ;;;   key-release keycode key-event
+;;;   modifiers                   the keyboard's modifiers changed
 ;;;   pointer-enter x y / pointer-leave / pointer-motion x y
 ;;;   pointer-button button pressed?
 ;;;   scroll axis amount discrete?   (axis 0 vertical, 1 horizontal)
@@ -312,7 +314,8 @@
     (when (and (not (logtest caps WL_SEAT_CAPABILITY_KEYBOARD)) (window-keyboard-proxy w))
       (wl_keyboard_release (window-keyboard-proxy w))
       (window-keyboard-proxy-set! w #f)
-      (emit w 'focus #f))
+      (keyboard-reset-modifiers! (window-keyboard w))
+      (emit w 'focus #f '()))
     (when (and (not (logtest caps WL_SEAT_CAPABILITY_POINTER)) (window-pointer w))
       (when (window-cursor-shape-device w)
         (wp_cursor_shape_device_v1_destroy (window-cursor-shape-device w))
@@ -338,15 +341,23 @@
                   (if (= (car args) WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
                       (keyboard-set-keymap! (window-keyboard w) fd size)
                       (close fd)))]
-      [(enter) (window-serial-set! w (car args)) (emit w 'focus #t)]
-      [(leave) (emit w 'focus #f)]
+      [(enter)
+       (window-serial-set! w (car args))
+       (emit w 'focus #t (let ([keys (caddr args)])
+                           (map (lambda (i) (bytevector-u32-native-ref keys (* 4 i)))
+                                (iota (quotient (bytevector-length keys) 4)))))]
+      [(leave)
+       (keyboard-reset-modifiers! (window-keyboard w))
+       (emit w 'focus #f '())]
       [(key)
        (let ([serial (car args)] [key (caddr args)] [state (cadddr args)])
          (window-serial-set! w serial)
          (if (= state WL_KEYBOARD_KEY_STATE_PRESSED)
              (emit w 'key-press (keyboard-translate (window-keyboard w) key KEY-PRESS) key)
              (emit w 'key-release key (keyboard-translate (window-keyboard w) key KEY-RELEASE))))]
-      [(modifiers) (apply keyboard-update-modifiers! (window-keyboard w) (cdr args))]
+      [(modifiers)
+       (apply keyboard-update-modifiers! (window-keyboard w) (cdr args))
+       (emit w 'modifiers)]
       [(repeat_info) (window-repeat-rate-set! w (car args)) (window-repeat-delay-set! w (cadr args))]
       [else (void)]))
 
@@ -378,7 +389,7 @@
          (window-axis-source-set! w #f))]
       [else (void)]))
 
-  ;; name: 'text or 'default
+  ;; name: 'text, 'default or 'pointer (a hand, over a link)
   (define (window-set-cursor! w name)
     (unless (eq? name (window-cursor-name w))
       (window-cursor-name-set! w name)
@@ -392,9 +403,10 @@
           [(window-cursor-shape-device w)
            => (lambda (dev)
                 (wp_cursor_shape_device_v1_set_shape
-                 dev serial (if (eq? name 'text)
-                                WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT
-                                WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT)))]
+                 dev serial (case name
+                              [(text) WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT]
+                              [(pointer) WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER]
+                              [else WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT])))]
           [else (set-theme-cursor! w p serial name)]))))
 
   ;; fallback: cursor images from the XCursor theme via libwayland-cursor
@@ -407,9 +419,10 @@
           (window-cursor-surface-set! w (wl_compositor_create_surface (global w "wl_compositor")))))
       (let ([theme (window-cursor-theme w)])
         (unless (eq? theme 'none)
-          (let ([cursor (let loop ([names (if (eq? name 'text)
-                                               '("text" "xterm" "ibeam")
-                                               '("default" "left_ptr"))])
+          (let ([cursor (let loop ([names (case name
+                                            [(text) '("text" "xterm" "ibeam")]
+                                            [(pointer) '("pointer" "hand2" "hand1")]
+                                            [else '("default" "left_ptr")])])
                           (cond [(null? names) 0]
                                 [else (let ([c (wl_cursor_theme_get_cursor theme (car names))])
                                         (if (ptr-null? c) (loop (cdr names)) c))]))])

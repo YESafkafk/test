@@ -27,20 +27,21 @@
    wl_cursor_image_get_buffer xkb_context_new xkb_context_unref
    xkb_keymap_new_from_string xkb_keymap_unref
    xkb_keymap_key_repeats xkb_keymap_mod_get_index
-   xkb_state_new xkb_state_unref xkb_state_update_mask
-   xkb_state_key_get_one_sym xkb_state_key_get_utf32
-   xkb_state_mod_index_is_active xkb_state_key_get_layout
-   xkb_keymap_key_get_syms_by_level xkb_keysym_to_utf32
-   xkb_keysym_to_lower xkb_keysym_from_name xkb_keysym_get_name
-   xkb_compose_table_new_from_locale xkb_compose_table_unref
-   xkb_compose_state_new xkb_compose_state_unref
-   xkb_compose_state_feed xkb_compose_state_reset
-   xkb_compose_state_get_status xkb_compose_state_get_one_sym
-   xkb_compose_state_get_utf8 FT_Init_FreeType FT_Done_FreeType
-   FT_New_Face FT_Done_Face FT_Set_Pixel_Sizes FT_Select_Size
-   FT_Get_Char_Index FT_Load_Glyph FT_Render_Glyph
-   FT_Library_SetLcdFilter FT_Set_Transform
-   FT_GlyphSlot_Embolden FT_GlyphSlot_Oblique
+   xkb_keymap_key_for_each xkb_state_new xkb_state_unref
+   xkb_state_update_mask xkb_state_update_key
+   xkb_state_serialize_mods xkb_state_key_get_one_sym
+   xkb_state_key_get_utf32 xkb_state_mod_index_is_active
+   xkb_state_key_get_layout xkb_keymap_key_get_syms_by_level
+   xkb_keysym_to_utf32 xkb_keysym_to_lower xkb_keysym_from_name
+   xkb_keysym_get_name xkb_compose_table_new_from_locale
+   xkb_compose_table_unref xkb_compose_state_new
+   xkb_compose_state_unref xkb_compose_state_feed
+   xkb_compose_state_reset xkb_compose_state_get_status
+   xkb_compose_state_get_one_sym xkb_compose_state_get_utf8
+   FT_Init_FreeType FT_Done_FreeType FT_New_Face FT_Done_Face
+   FT_Set_Pixel_Sizes FT_Select_Size FT_Get_Char_Index
+   FT_Load_Glyph FT_Render_Glyph FT_Library_SetLcdFilter
+   FT_Set_Transform FT_GlyphSlot_Embolden FT_GlyphSlot_Oblique
    FcInitLoadConfigAndFonts FcConfigDestroy FcConfigSubstitute
    FcDefaultSubstitute FcFontMatch FcNameParse FcPatternCreate
    FcPatternDestroy FcPatternDuplicate FcPatternAddString
@@ -53,12 +54,12 @@
    pixman_image_unref pixman_image_composite32 pixman_fill
    pixman_blt XKB_KEYSYM_NO_FLAGS XKB_KEYSYM_CASE_INSENSITIVE
    XKB_CONTEXT_NO_FLAGS XKB_KEYMAP_COMPILE_NO_FLAGS
-   XKB_KEYMAP_FORMAT_TEXT_V1 XKB_STATE_MODS_DEPRESSED
-   XKB_STATE_MODS_LATCHED XKB_STATE_MODS_LOCKED
-   XKB_STATE_MODS_EFFECTIVE XKB_STATE_LAYOUT_DEPRESSED
-   XKB_STATE_LAYOUT_LATCHED XKB_STATE_LAYOUT_LOCKED
-   XKB_STATE_LAYOUT_EFFECTIVE XKB_STATE_LEDS
-   XKB_STATE_MATCH_ANY XKB_STATE_MATCH_ALL
+   XKB_KEYMAP_FORMAT_TEXT_V1 XKB_KEY_UP XKB_KEY_DOWN
+   XKB_STATE_MODS_DEPRESSED XKB_STATE_MODS_LATCHED
+   XKB_STATE_MODS_LOCKED XKB_STATE_MODS_EFFECTIVE
+   XKB_STATE_LAYOUT_DEPRESSED XKB_STATE_LAYOUT_LATCHED
+   XKB_STATE_LAYOUT_LOCKED XKB_STATE_LAYOUT_EFFECTIVE
+   XKB_STATE_LEDS XKB_STATE_MATCH_ANY XKB_STATE_MATCH_ALL
    XKB_STATE_MATCH_NON_EXCLUSIVE XKB_COMPOSE_COMPILE_NO_FLAGS
    XKB_COMPOSE_FORMAT_TEXT_V1 XKB_COMPOSE_STATE_NO_FLAGS
    XKB_COMPOSE_NOTHING XKB_COMPOSE_COMPOSING
@@ -463,6 +464,10 @@
     (foreign-procedure "xkb_keymap_mod_get_index"
       (uptr utf-8)
       unsigned-int))
+  (define xkb_keymap_key_for_each
+    (foreign-procedure "xkb_keymap_key_for_each"
+      (uptr uptr uptr)
+      void))
   (define xkb_state_new
     (foreign-procedure "xkb_state_new" (uptr) uptr))
   (define xkb_state_unref
@@ -477,6 +482,14 @@
        unsigned-int
        unsigned-int)
       int))
+  (define xkb_state_update_key
+    (foreign-procedure "xkb_state_update_key"
+      (uptr unsigned-int int)
+      int))
+  (define xkb_state_serialize_mods
+    (foreign-procedure "xkb_state_serialize_mods"
+      (uptr int)
+      unsigned-int))
   (define xkb_state_key_get_one_sym
     (foreign-procedure "xkb_state_key_get_one_sym"
       (uptr unsigned-int)
@@ -678,6 +691,8 @@
   (define XKB_CONTEXT_NO_FLAGS 0)
   (define XKB_KEYMAP_COMPILE_NO_FLAGS 0)
   (define XKB_KEYMAP_FORMAT_TEXT_V1 1)
+  (define XKB_KEY_UP 0)
+  (define XKB_KEY_DOWN 1)
   (define XKB_STATE_MODS_DEPRESSED 1)
   (define XKB_STATE_MODS_LATCHED 2)
   (define XKB_STATE_MODS_LOCKED 4)

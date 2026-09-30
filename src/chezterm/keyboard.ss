@@ -3,20 +3,20 @@
 ;;; legacy xterm encoding, and the kitty keyboard protocol.
 (library (chezterm keyboard)
   (export make-keyboard keyboard? keyboard-set-keymap! keyboard-set-keymap-string!
-          keyboard-update-modifiers!
+          keyboard-update-modifiers! keyboard-reset-modifiers!
           keyboard-translate keyboard-repeats? keyboard-mods keyboard-locks
           MOD-SHIFT MOD-ALT MOD-CTRL MOD-SUPER MOD-HYPER MOD-META MOD-CAPS-LOCK MOD-NUM-LOCK
           KBD-DISAMBIGUATE KBD-EVENT-TYPES KBD-ALTERNATE-KEYS KBD-ALL-KEYS KBD-TEXT
           KEY-PRESS KEY-REPEAT KEY-RELEASE
           encode-key keysym-by-name keysym-lower parse-key-binding
-          make-key-event key-event-sym key-event-text key-event-mods key-event?
-          key-event-locks key-event-key key-event-shifted key-event-base key-event-type
-          key-event-composed? key-event-with-type key-event-modifier-key?)
+          make-key-event key-event-sym key-event-text key-event-mods key-event-legacy-mods
+          key-event? key-event-locks key-event-key key-event-shifted key-event-base
+          key-event-type key-event-composed? key-event-with-type key-event-modifier-key?)
   (import (chezscheme) (chezterm ffi) (chezterm cutil))
 
   ;; Modifier bits, as the kitty keyboard protocol numbers them.  key-event-mods
-  ;; holds the first four (what the legacy encoding and key bindings use),
-  ;; key-event-locks the lock bits.
+  ;; holds the first six, key-event-locks the lock bits.  The legacy encoding
+  ;; and key bindings only look at the first four (MOD-LEGACY).
   (define MOD-SHIFT 1)
   (define MOD-ALT 2)
   (define MOD-CTRL 4)
@@ -25,6 +25,7 @@
   (define MOD-META 32)
   (define MOD-CAPS-LOCK 64)
   (define MOD-NUM-LOCK 128)
+  (define MOD-LEGACY 15)
 
   ;; Progressive enhancement flags of the kitty keyboard protocol.
   (define KBD-DISAMBIGUATE 1)
@@ -45,8 +46,9 @@
     (fields context
             (mutable keymap) (mutable state)
             (mutable compose-state)
-            (mutable mod-indices)        ; vector of xkb mod indices
-            (mutable mods)               ; MOD-SHIFT/ALT/CTRL/SUPER bits
+            (mutable mod-indices)        ; ((xkb mod index . MOD- bit) ...)
+            (mutable key-bits)           ; modifier keysym -> the MOD- bit its key sets
+            (mutable mods)               ; MOD-SHIFT/ALT/CTRL/SUPER/HYPER/META bits
             (mutable locks)              ; MOD-CAPS-LOCK/NUM-LOCK bits
             (mutable held))              ; ((evdev key . mod bit) ...) of modifier keys
     (protocol
@@ -56,12 +58,12 @@
                 [locale (or (getenv "LC_ALL") (getenv "LC_CTYPE") (getenv "LANG") "C")]
                 [table (xkb_compose_table_new_from_locale ctx locale 0)]
                 [cstate (if (ptr-null? table) 0 (xkb_compose_state_new table 0))])
-           (new ctx 0 0 cstate (vector) 0 0 '()))))))
+           (new ctx 0 0 cstate '() (make-eqv-hashtable) 0 0 '()))))))
 
   ;; A translated key event.
   ;;   sym       keysym, with the active modifiers applied
   ;;   text      text the key produces ("" if none)
-  ;;   mods      MOD-SHIFT/ALT/CTRL/SUPER bits
+  ;;   mods      MOD-SHIFT/ALT/CTRL/SUPER/HYPER/META bits
   ;;   locks     MOD-CAPS-LOCK/NUM-LOCK bits
   ;;   key       keysym without modifiers (level 1 of the active layout)
   ;;   shifted   code point of sym when it differs from key's, else 0
@@ -83,6 +85,9 @@
          (mk-key-event sym text mods 0 key (if (= cp (xkb_keysym_to_utf32 key)) 0 cp) 0 KEY-PRESS #f))]
       [(sym text mods locks key shifted base type composed)
        (mk-key-event sym text mods locks key shifted base type composed)]))
+
+  ;; The modifiers the legacy encoding and key bindings look at.
+  (define (key-event-legacy-mods ev) (logand (key-event-mods ev) MOD-LEGACY))
 
   (define (key-event-with-type ev type)
     (mk-key-event (key-event-sym ev) (key-event-text ev) (key-event-mods ev) (key-event-locks ev)
@@ -110,30 +115,162 @@
         (keyboard-keymap-set! kb km)
         (keyboard-state-set! kb (xkb_state_new km))
         (keyboard-held-set! kb '())
-        (keyboard-mod-indices-set!
-         kb (vector (xkb_keymap_mod_get_index km "Shift")
-                    (xkb_keymap_mod_get_index km "Mod1")
-                    (xkb_keymap_mod_get_index km "Control")
-                    (xkb_keymap_mod_get_index km "Mod4")
-                    (xkb_keymap_mod_get_index km "Lock")
-                    (xkb_keymap_mod_get_index km "Mod2"))))))   ; Num Lock
+        (keyboard-mods-set! kb 0)
+        (keyboard-locks-set! kb 0)
+        (let-values ([(indices key-bits) (modifier-mapping km)])
+          (keyboard-mod-indices-set! kb indices)
+          (keyboard-key-bits-set! kb key-bits)))))
 
-  (define mod-bits (vector MOD-SHIFT MOD-ALT MOD-CTRL MOD-SUPER MOD-CAPS-LOCK MOD-NUM-LOCK))
+  ;;; Modifier mapping ------------------------------------------------------------
+  ;;; Which real modifier (Shift, Lock, Control, Mod1-Mod5) stands for Alt,
+  ;;; Super, Hyper or Meta depends on the keymap.  Usually Hyper shares Mod4
+  ;;; with Super and Meta shares Mod1 with Alt, so an xkb modifier index alone
+  ;;; says nothing.  As kitty does (glfw/xkb_glfw.c), every key of the keymap
+  ;;; is pressed in a scratch state; a key with one keysym that sets exactly
+  ;;; one real modifier maps that modifier to its keysym's class.  Classes
+  ;;; then get their modifier in a fixed order, and a modifier already taken
+  ;;; is not given out again: Alt and Super win over Hyper and Meta.  When
+  ;;; Shift, Control, Alt or Super is not found, or keys of one class set
+  ;;; different modifiers, the modifiers are looked up by name instead, and
+  ;;; Hyper and Meta are never reported.  (kitty's second pass, with Shift
+  ;;; held, cannot find anything: Shift is then always one of two bits.)
+
+  ;; class, its keysyms, its bit; in the order modifiers are handed out
+  (define modifier-classes
+    (map (lambda (c) (list (car c) (map keysym-by-name (cadr c)) (caddr c)))
+         `((ctrl ("Control_L" "Control_R") ,MOD-CTRL)
+           (shift ("Shift_L" "Shift_R") ,MOD-SHIFT)
+           (caps ("Caps_Lock") ,MOD-CAPS-LOCK)
+           (alt ("Alt_L" "Alt_R") ,MOD-ALT)
+           (super ("Super_L" "Super_R") ,MOD-SUPER)
+           (hyper ("Hyper_L" "Hyper_R") ,MOD-HYPER)
+           (meta ("Meta_L" "Meta_R") ,MOD-META)
+           (num ("Num_Lock") ,MOD-NUM-LOCK))))
+
+  ;; keysym -> class
+  (define modifier-keysym-classes
+    (let ([h (make-eqv-hashtable)])
+      (for-each (lambda (c) (for-each (lambda (sym) (hashtable-set! h sym (car c))) (cadr c)))
+                modifier-classes)
+      h))
+
+  (define mods-components
+    (logor XKB_STATE_MODS_DEPRESSED XKB_STATE_MODS_LATCHED XKB_STATE_MODS_LOCKED))
+
+  ;; The keymap walk: xkb calls key-walker for every keycode, which calls
+  ;; the current probe.
+  (define current-probe (lambda (key) (void)))
+  (define key-walker
+    (let ([fc (foreign-callable
+               (lambda (km key data)
+                 ;; no Scheme error may unwind through xkb
+                 (guard (e [#t (void)]) (current-probe key)))
+               (uptr unsigned-32 uptr)
+               void)])
+      (lock-object fc)
+      (foreign-callable-entry-point fc)))
+
+  ;; class -> the real modifier mask its keys set, or 'conflict; #f when
+  ;; no state could be made
+  (define (probe-modifier-keys km)
+    (let ([st (xkb_state_new km)] [found (make-eq-hashtable)])
+      (and (not (ptr-null? st))
+           (begin
+             (set! current-probe
+                   (lambda (key)
+                     (let ([changed (xkb_state_update_key st key XKB_KEY_DOWN)])
+                       (when (logtest changed mods-components)
+                         (let ([mask (xkb_state_serialize_mods st mods-components)]
+                               [class (hashtable-ref modifier-keysym-classes
+                                                     (xkb_state_key_get_one_sym st key) #f)])
+                           (when (and class (> mask 0) (= 0 (logand mask (- mask 1))))
+                             (let ([old (hashtable-ref found class #f)])
+                               (cond
+                                 [(not old) (hashtable-set! found class mask)]
+                                 ;; lock keys: the first one wins
+                                 [(or (eqv? old mask) (memq class '(caps num))) (void)]
+                                 [else (hashtable-set! found class 'conflict)])))))
+                       (xkb_state_update_key st key XKB_KEY_UP)
+                       ;; drop latches and locks the key left behind
+                       (xkb_state_update_mask st 0 0 0 0 0 0))))
+             (xkb_keymap_key_for_each km key-walker 0)
+             (set! current-probe (lambda (key) (void)))
+             (xkb_state_unref st)
+             found))))
+
+  (define (mask->index mask)
+    (let loop ([i 0]) (if (logbit? i mask) i (loop (+ i 1)))))
+
+  ;; (values ((xkb mod index . MOD- bit) ...) key-bits) for keymap KM, where
+  ;; key-bits maps each modifier keysym to the bit its key sets.
+  (define (modifier-mapping km)
+    (let* ([found (probe-modifier-keys km)]
+           [mask (lambda (class)
+                   (let ([m (and found (hashtable-ref found class #f))]) (and (fixnum? m) m)))]
+           [key-bits (make-eqv-hashtable)])
+      (if (and found
+               (for-all mask '(shift ctrl alt super))
+               (not (exists (lambda (c) (eq? (hashtable-ref found (car c) #f) 'conflict))
+                            modifier-classes)))
+          ;; mask -> the class that got it
+          (let ([owner (make-eqv-hashtable)])
+            (for-each (lambda (c)
+                        (let ([m (mask (car c))])
+                          (when (and m (not (hashtable-contains? owner m)))
+                            (hashtable-set! owner m c))))
+                      modifier-classes)
+            ;; a lock without a lock key: by name, if that modifier is free
+            (for-each (lambda (class name)
+                        (let ([i (xkb_keymap_mod_get_index km name)])
+                          (unless (or (mask class) (>= i 32) (hashtable-contains? owner (ash 1 i)))
+                            (hashtable-set! owner (ash 1 i) (assq class modifier-classes)))))
+                      '(caps num) '("Lock" "Mod2"))
+            ;; a key sets the bit of whichever class got its modifier
+            (for-each (lambda (c)
+                        (let ([o (and (mask (car c)) (hashtable-ref owner (mask (car c)) #f))])
+                          (when o
+                            (for-each (lambda (sym) (hashtable-set! key-bits sym (caddr o))) (cadr c)))))
+                      modifier-classes)
+            (values (let-values ([(ms cs) (hashtable-entries owner)])
+                      (map (lambda (m c) (cons (mask->index m) (caddr c)))
+                           (vector->list ms) (vector->list cs)))
+                    key-bits))
+          ;; by name, without Hyper and Meta
+          (let ([named '((shift "Shift") (alt "Mod1") (ctrl "Control") (super "Mod4")
+                         (caps "Lock") (num "Mod2"))])
+            (for-each (lambda (n)
+                        (let ([c (assq (car n) modifier-classes)])
+                          (for-each (lambda (sym) (hashtable-set! key-bits sym (caddr c))) (cadr c))))
+                      named)
+            (values (map (lambda (n)
+                           (cons (xkb_keymap_mod_get_index km (cadr n))
+                                 (caddr (assq (car n) modifier-classes))))
+                         named)
+                    key-bits)))))
 
   (define (keyboard-update-modifiers! kb depressed latched locked group)
     (let ([st (keyboard-state kb)])
       (unless (ptr-null? st)
         (xkb_state_update_mask st depressed latched locked 0 0 group)
-        (let* ([idx (keyboard-mod-indices kb)]
-               [m (let loop ([i 0] [m 0])
-                    (if (= i (vector-length idx))
-                        m
-                        (loop (+ i 1)
-                              (if (> (xkb_state_mod_index_is_active st (vector-ref idx i) XKB_STATE_MODS_EFFECTIVE) 0)
-                                  (logor m (vector-ref mod-bits i))
-                                  m))))])
-          (keyboard-mods-set! kb (logand m 15))
+        (let ([m (fold-left (lambda (m e)
+                              (if (> (xkb_state_mod_index_is_active st (car e) XKB_STATE_MODS_EFFECTIVE) 0)
+                                  (logor m (cdr e))
+                                  m))
+                            0 (keyboard-mod-indices kb))])
+          (keyboard-mods-set! kb (logand m 63))
           (keyboard-locks-set! kb (logand m (logor MOD-CAPS-LOCK MOD-NUM-LOCK)))))))
+
+  ;; Forget the modifiers, held modifier keys and a compose sequence in
+  ;; progress when the keyboard focus leaves; the compositor sends the
+  ;; modifiers again after the next enter.
+  (define (keyboard-reset-modifiers! kb)
+    (let ([st (keyboard-state kb)])
+      (unless (ptr-null? st) (xkb_state_update_mask st 0 0 0 0 0 0)))
+    (let ([cs (keyboard-compose-state kb)])
+      (unless (ptr-null? cs) (xkb_compose_state_reset cs)))
+    (keyboard-mods-set! kb 0)
+    (keyboard-locks-set! kb 0)
+    (keyboard-held-set! kb '()))
 
   (define (keyboard-repeats? kb key)
     (and (not (ptr-null? (keyboard-keymap kb)))
@@ -150,23 +287,17 @@
 
   (define (utf32 sym) (xkb_keysym_to_utf32 sym))
 
-  ;; The modifier bit a modifier key sets.  The kitty keyboard protocol wants
-  ;; it in the key's own events, but xkb's state only changes after them.
-  (define (modifier-key-bit sym)
-    (cond
-      [(memv sym (list XK-Shift-L XK-Shift-R)) MOD-SHIFT]
-      [(memv sym (list XK-Control-L XK-Control-R)) MOD-CTRL]
-      [(memv sym (list XK-Alt-L XK-Alt-R)) MOD-ALT]
-      [(memv sym (list XK-Super-L XK-Super-R)) MOD-SUPER]
-      [(= sym XK-Caps-Lock) MOD-CAPS-LOCK]
-      [(= sym XK-Num-Lock) MOD-NUM-LOCK]
-      [else #f]))
+  ;; The modifier bit a modifier key sets, or #f (see modifier-mapping): a
+  ;; Hyper key on the same modifier as Super sets MOD-SUPER.  The kitty
+  ;; keyboard protocol wants it in the key's own events, but xkb's state only
+  ;; changes after them.
+  (define (modifier-key-bit kb sym) (hashtable-ref (keyboard-key-bits kb) sym #f))
 
   ;; Modifiers and locks of an event of modifier key KEY (with keysym SYM),
   ;; as they are after the event.  Releasing one Ctrl key while the other is
   ;; held keeps Ctrl.
   (define (modifier-key-state! kb key sym press)
-    (let ([bit (modifier-key-bit sym)] [mods (keyboard-mods kb)] [locks (keyboard-locks kb)])
+    (let ([bit (modifier-key-bit kb sym)] [mods (keyboard-mods kb)] [locks (keyboard-locks kb)])
       (keyboard-held-set! kb (let ([h (remp (lambda (e) (= (car e) key)) (keyboard-held kb))])
                                (if (and press bit) (cons (cons key bit) h) h)))
       (cond
@@ -197,7 +328,7 @@
                   [event (lambda (sym text composed mods locks)
                            (make-key-event sym text mods locks key-sym shifted base type composed))])
              (cond
-               [(modifier-key-bit key-sym)
+               [(modifier-key-bit kb key-sym)
                 (let-values ([(mods locks) (modifier-key-state! kb key key-sym press)])
                   (event sym "" #f mods locks))]
                [(memv key-sym modifier-keys)
@@ -247,11 +378,7 @@
     (XK-KP-Add "KP_Add") (XK-KP-Subtract "KP_Subtract") (XK-KP-Multiply "KP_Multiply")
     (XK-KP-Divide "KP_Divide") (XK-KP-Separator "KP_Separator") (XK-KP-Equal "KP_Equal")
     (XK-F1 "F1") (XK-F35 "F35") (XK-Menu "Menu")
-    (XK-KP-Space "KP_Space")
-    (XK-Shift-L "Shift_L") (XK-Shift-R "Shift_R") (XK-Control-L "Control_L")
-    (XK-Control-R "Control_R") (XK-Alt-L "Alt_L") (XK-Alt-R "Alt_R")
-    (XK-Super-L "Super_L") (XK-Super-R "Super_R")
-    (XK-Caps-Lock "Caps_Lock") (XK-Num-Lock "Num_Lock"))
+    (XK-KP-Space "KP_Space"))
 
   (define (csi-mod mods)
     ;; xterm modifier parameter: 1 + shift + 2*alt + 4*ctrl + 8*super
@@ -289,20 +416,29 @@
   ;; Bytes (as a string) to send for key event EV given the terminal modes and
   ;; the kitty keyboard protocol FLAGS, or #f when the event sends nothing.
   ;; With flags 0 this is the legacy encoding, which reports no releases.
+  ;; With LEGACY-CSI-U, keys that the legacy encoding sends nothing for, such
+  ;; as media keys, Menu, Print or F21-F35, are sent as kitty does with flags
+  ;; 0: as CSI u (or CSI 29 ~ for Menu, xterm's F16), which the
+  ;; specification allows.
   (define encode-key
     (case-lambda
       [(ev app-cursor app-keypad newline-mode)
-       (encode-key ev app-cursor app-keypad newline-mode 0)]
+       (encode-key ev app-cursor app-keypad newline-mode 0 #f)]
       [(ev app-cursor app-keypad newline-mode flags)
+       (encode-key ev app-cursor app-keypad newline-mode flags #f)]
+      [(ev app-cursor app-keypad newline-mode flags legacy-csi-u)
        (cond
          [(not (= flags 0)) (encode-kitty-key ev flags app-cursor)]
          [(= (key-event-type ev) KEY-RELEASE) #f]
-         [else (encode-legacy-key ev app-cursor app-keypad newline-mode)])]))
+         [(encode-legacy-key ev app-cursor app-keypad newline-mode)]
+         [(and legacy-csi-u (hashtable-contains? functional-keys (key-event-key ev)))
+          (encode-kitty-key ev 0 app-cursor)]
+         [else #f])]))
 
   (define (encode-legacy-key ev app-cursor app-keypad newline-mode)
     (let* ([sym (key-event-sym ev)]
            [text (key-event-text ev)]
-           [mods (key-event-mods ev)]
+           [mods (key-event-legacy-mods ev)]
            ;; shift is implied in text; only report it for special keys
            [alt (logtest mods MOD-ALT)]
            [ctrl (logtest mods MOD-CTRL)]

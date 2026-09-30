@@ -48,8 +48,9 @@
   ;; xkbcommon
   xkb_context_new xkb_context_unref
   (xkb_keymap_new_from_string (string uptr)) xkb_keymap_unref xkb_keymap_key_repeats
-  xkb_keymap_mod_get_index
-  xkb_state_new xkb_state_unref xkb_state_update_mask
+  xkb_keymap_mod_get_index xkb_keymap_key_for_each
+  xkb_state_new xkb_state_unref xkb_state_update_mask xkb_state_update_key
+  xkb_state_serialize_mods
   xkb_state_key_get_one_sym xkb_state_key_get_utf32 xkb_state_mod_index_is_active
   xkb_state_key_get_layout xkb_keymap_key_get_syms_by_level
   xkb_keysym_to_utf32 xkb_keysym_to_lower xkb_keysym_from_name xkb_keysym_get_name
@@ -88,7 +89,7 @@
 ;; Enumerations: every enumerator whose name starts with one of these.
 (enum-prefixes
   "FT_PIXEL_MODE_" "FT_RENDER_MODE_" "FT_LCD_FILTER_" "FT_ENCODING_NONE"
-  "XKB_STATE_" "XKB_KEYMAP_FORMAT_TEXT_V1" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
+  "XKB_STATE_" "XKB_KEY_DOWN" "XKB_KEY_UP" "XKB_KEYMAP_FORMAT_TEXT_V1" "XKB_CONTEXT_NO_FLAGS" "XKB_KEYMAP_COMPILE_NO_FLAGS"
   "XKB_COMPOSE_" "XKB_KEYSYM_" "FcResult" "FcMatch"
   "PIXMAN_OP_OVER" "PIXMAN_OP_SRC" "PIXMAN_a8r8g8b8" "PIXMAN_x8r8g8b8" "PIXMAN_a8")
 

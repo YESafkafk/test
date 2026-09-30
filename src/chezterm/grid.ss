@@ -7,18 +7,23 @@
 ;;; COLOR-RGB | #xRRGGBB for direct colors.  The color fields hold the color
 ;;; XORed with its default (COLOR-FG or COLOR-BG), so that an empty cell with
 ;;; default colors is all zeros and a whole line is cleared with
-;;; fxvector-fill!; cell-fg / cell-bg / cell-set! do the conversion.
-;;; Combining characters are kept in a per-line table mapping a column to a
-;;; string.
+;;; fxvector-fill!; cell-fg / cell-bg / cell-set! do the conversion.  Colors
+;;; take 25 bits, so bits 26 and up of the foreground field hold an underline
+;;; color (SGR 58) plus one, or 0 for none: see ul-field and cell-ul-color.
+;;; What does not fit into the fxvector is kept in a per-line table, the
+;;; line's extras, mapping a column to a cell extra (see below): combining
+;;; characters and a hyperlink.
 (library (chezterm grid)
   (export ATTR-BOLD ATTR-DIM ATTR-ITALIC ATTR-UNDERLINE-MASK ATTR-UNDERLINE-SHIFT
           ATTR-BLINK ATTR-REVERSE ATTR-HIDDEN ATTR-STRIKE ATTR-WIDE ATTR-SPACER
           UL-NONE UL-SINGLE UL-DOUBLE UL-CURLY UL-DOTTED UL-DASHED
           COLOR-FG COLOR-BG COLOR-CURSOR COLOR-RGB
-          cell-ch cell-attrs cell-fg cell-bg cell-set! cell-copy! cell-empty?
-          fg-field bg-field
+          cell-ch cell-attrs cell-fg cell-bg cell-ul-color cell-set! cell-copy! cell-empty?
+          fg-field bg-field ul-field
           make-line line? line-cells line-cols line-wrapped line-wrapped-set!
           line-extra line-extra-set! line-extra-delete! line-clear! line-fill!
+          make-extra extra-marks extra-link
+          line-marks line-link line-ul-color line-extra-put! line-extra-fill! line-add-mark!
           line-content-length
           line-copy
           make-grid grid? grid-rows grid-cols grid-line grid-screen-line
@@ -57,7 +62,13 @@
   (define-syntax bg-field
     (syntax-rules () [(_ c) (fxxor c 257)]))   ; COLOR-BG
   (define-syntax cell-fg
-    (syntax-rules () [(_ v i) (fg-field (fxvector-ref v (fx+ 1 (fx* 3 i))))]))
+    (syntax-rules () [(_ v i) (fg-field (fxand (fxvector-ref v (fx+ 1 (fx* 3 i))) #x3FFFFFF))]))
+  ;; what an underline color C (or #f) adds to a foreground color
+  (define (ul-field c) (if c (fxsll (fx+ c 1) 26) 0))
+  ;; the underline color of a cell, #f for the foreground
+  (define-syntax cell-ul-color
+    (syntax-rules ()
+      [(_ v i) (let ([u (fxsrl (fxvector-ref v (fx+ 1 (fx* 3 i))) 26)]) (and (fx> u 0) (fx- u 1)))]))
   (define-syntax cell-bg
     (syntax-rules () [(_ v i) (bg-field (fxvector-ref v (fx+ 2 (fx* 3 i))))]))
   (define-syntax cell-empty?
@@ -75,6 +86,58 @@
       (fxvector-set! dst (fx+ b 1) (fxvector-ref src (fx+ a 1)))
       (fxvector-set! dst (fx+ b 2) (fxvector-ref src (fx+ a 2)))))
 
+  ;;; Cell extras ---------------------------------------------------------
+  ;;; A cell extra is either a string of combining characters, or, when the
+  ;;; cell also has a hyperlink, #(marks link): marks is a string ("" for
+  ;;; none) and link a hyperlink id (0 for none).  Extras are never changed
+  ;;; in place, so one extra can be shared by many cells, and equal? compares
+  ;;; them.
+
+  (define (make-extra marks link)
+    (if (fx= link 0)
+        (and (fx> (string-length marks) 0) marks)
+        (vector marks link)))
+
+  (define (extra-marks x) (if (string? x) x (vector-ref x 0)))
+  (define (extra-link x) (if (string? x) 0 (vector-ref x 1)))
+
+  (define (line-extra-ref l col)
+    (let ([ex (line-extra l)]) (and ex (hashtable-ref ex col #f))))
+
+  ;; the combining characters of column COL, or #f
+  (define (line-marks l col)
+    (let ([x (line-extra-ref l col)])
+      (and x (let ([m (extra-marks x)]) (and (fx> (string-length m) 0) m)))))
+
+  ;; the hyperlink id of column COL, 0 for none
+  (define (line-link l col)
+    (let ([x (line-extra-ref l col)]) (if x (extra-link x) 0)))
+
+  ;; the underline color of column COL, #f for the foreground
+  (define (line-ul-color l col) (cell-ul-color (line-cells l) col))
+
+  ;; Set the extra of column COL to X (#f: none).
+  (define (line-extra-put! l col x)
+    (if x
+        (begin
+          (unless (line-extra l) (line-extra-set! l (make-eqv-hashtable)))
+          (hashtable-set! (line-extra l) col x))
+        (line-extra-delete! l col (fx+ col 1))))
+
+  ;; Set the extra of columns [from, to) to X, which is not #f.
+  (define (line-extra-fill! l from to x)
+    (unless (line-extra l) (line-extra-set! l (make-eqv-hashtable)))
+    (let ([ex (line-extra l)])
+      (do ([i from (fx+ i 1)]) ((fx>= i to))
+        (hashtable-set! ex i x))))
+
+  ;; Add combining character CP to column COL, keeping at most 8.
+  (define (line-add-mark! l col cp)
+    (let* ([x (line-extra-ref l col)] [marks (if x (extra-marks x) "")])
+      (when (fx< (string-length marks) 8)
+        (line-extra-put! l col (make-extra (string-append marks (string (integer->char cp)))
+                                           (if x (extra-link x) 0))))))
+
   ;;; Lines ---------------------------------------------------------------
 
   (define-record-type line
@@ -86,9 +149,8 @@
 
   (define (line-cols l) (fxquotient (fxvector-length (line-cells l)) 3))
 
-  ;; Remove the combining characters of columns [from, to).  A table that
-  ;; becomes empty is dropped, so that lines without combining characters
-  ;; skip it entirely.
+  ;; Remove the extras of columns [from, to).  A table that becomes empty is
+  ;; dropped, so that lines without extras skip it entirely.
   (define (line-extra-delete! l from to)
     (let ([ex (line-extra l)])
       (when ex

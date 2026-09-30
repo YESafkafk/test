@@ -5,19 +5,19 @@ would go in the code.
 
 ## Small
 
-### OSC 8 hyperlinks
+### OSC 8 hyperlinks (done)
 
-The parser currently drops OSC 8. Cells would need a hyperlink id, which could
-be stored in the line's `extra` table like combining marks. `url-at` in
-`selection.ss` would look there first, so Ctrl+click opens explicit links too.
-Hovering could underline the whole link.
+Cells keep a link id in the line's `extra` table, and the terminal maps ids
+to URIs. Ctrl+click opens explicit links before URLs found in the text, and
+hovering with Ctrl underlines the whole link. What is left: keyboard hints
+(below) could label explicit links as well.
 
-### Underline color (SGR 58/59)
+### Underline color (SGR 58/59) (done)
 
-This needs a per-cell color. The cheapest place is the line's `extra` table,
-because it is rare. `draw-underline!` already takes the color as a parameter.
-Once it is drawn, add `Setulc=\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm`
-to `terminfo/chezterm.terminfo`, and a check for it to `tests/terminfo.ss`.
+Cells keep the color in the unused upper bits of their foreground field,
+so printing costs nothing extra and blank cells stay all zeros (the line's
+`extra` table made `parse/sgr` 40% slower). `draw-underline!` draws every
+style in it, and the terminfo entries advertise `Setulc`.
 
 ### Performance findings from the benchmarks
 
@@ -62,23 +62,23 @@ files go into `protocols/` and the Makefile's `PROTOCOLS` list.
 ### Kitty keyboard protocol (done)
 
 Implemented: all five enhancement flags, the per-screen flags stacks in
-`terminal.ss`, the encoder in `keyboard.ss` (tested against the
-specification's examples) and release/repeat events in `app.ss`. What is
+`terminal.ss` (emptied by `RIS` and `DECSTR`), the encoder in `keyboard.ss`
+(tested against the specification's examples), release/repeat events in
+`app.ss`, Hyper and Meta when the keymap puts them on a modifier of their
+own (found by walking the keymap, as kitty does), and optionally `CSI u`
+for keys without a legacy encoding (`kitty-keyboard-legacy-csi-u`). What is
 left:
-- **Hyper and Meta modifiers.** Their bits (16, 32) can be encoded, but
-  `keyboard-update-modifiers!` never sets them. Keymaps usually put Hyper and
-  Meta on the same real modifier as Super or Alt, so their xkb indices say
-  nothing on their own. kitty works out the mapping by walking the keymap
-  (`xkb_keymap_key_for_each`) and keeping only modifiers that do not
-  overlap.
-- **Soft reset.** `DECSTR` keeps the flags; only `RIS` empties the stacks.
-  kitty clears them on both.
-- **Keys without a legacy encoding.** With flags 0, keys such as
-  Ctrl+Shift+letter, media keys and modified F13–F35 are sent as before (or
-  not at all), because the legacy encoding must not change. kitty sends
-  `CSI u` for them even in legacy mode, which the specification allows.
-- **Keys held across a focus change.** No release is reported for a key
-  that is held when the window loses focus, as in kitty.
+- **Hyper and Meta on a shared modifier.** Most keymaps put Hyper on Mod4
+  with Super and Meta on Mod1 with Alt. Such a Hyper key then reports
+  Super: the compositor only sends real modifiers, so the two cannot be
+  told apart.
+- **Keys pressed while the window was unfocused.** Their release, after the
+  focus came back, is reported although the application never saw the
+  press. foot does the same, kitty drops such releases. Keys held when the
+  focus leaves get no release, as in kitty and foot.
+- **Other keys without a legacy encoding.** With flags 0, only keys that
+  send nothing at all can be sent as `CSI u`. Keys such as Ctrl+Shift+letter
+  or modified F13–F20 keep their legacy bytes, which kitty replaces.
 
 ### Keyboard hints (Alacritty's "hints")
 

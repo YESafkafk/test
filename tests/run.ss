@@ -434,6 +434,263 @@
   (feed t "ok")
   (check "terminal alive after bad OSC" '("ok" "" "") (screen t)))
 
+;;; OSC 8 hyperlinks: parsing and storage
+(define (osc8 params uri) (esc "]8;" params ";" uri "\x1b;\\"))
+(define (link-id t row col) (line-link (grid-line (terminal-grid t) row) col))
+(define (link-at t row col) (terminal-link-uri t (link-id t row col)))
+(define (links t row) (map (lambda (c) (link-at t row c)) (iota (terminal-cols t))))
+
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://a.example/") "link" (osc8 "" "") " x")
+  (check "osc8: linked cells" (append (make-list 4 "http://a.example/") (make-list 6 #f)) (links t 0))
+  (check "osc8: text" "link x" (row-text t 0))
+  (feed t "\r\n" (esc "]8;;https://b.example/?q=1;x=2\a") "b" (esc "]8;;\a") "c")
+  (check "osc8: BEL-terminated, URI with ;" '("https://b.example/?q=1;x=2" #f) (list (link-at t 1 0) (link-at t 1 1))))
+
+;; blank cells stay all zeros, and a linked cell is stored like any other
+(let ([a (make-term 2 10)] [b (make-term 2 10)])
+  (feed a (osc8 "" "http://x/") "ab" (esc "[31m") "c" (osc8 "" ""))
+  (feed b "ab" (esc "[31m") "c")
+  (check "osc8: cells unchanged by links" #t
+         (equal? (line-cells (grid-line (terminal-grid a) 0)) (line-cells (grid-line (terminal-grid b) 0))))
+  (check "osc8: the rest of the line is all zeros" #t
+         (let ([v (line-cells (grid-line (terminal-grid a) 0))])
+           (for-all (lambda (i) (= 0 (fxvector-ref v (+ 9 i)))) (iota (* 3 7)))))
+  (check "osc8: no extras without links" #f (line-extra (grid-line (terminal-grid b) 0))))
+
+;; ids: runs with the same id and URI are one link; without an id every
+;; OSC 8 starts a link of its own
+(let ([t (make-term 3 20)])
+  (feed t (osc8 "id=x" "http://a/") "ab" (osc8 "" "") "--" (osc8 "id=x" "http://a/") "cd" (osc8 "" ""))
+  (check "osc8: same id, same link" #t (= (link-id t 0 0) (link-id t 0 4)))
+  (check "osc8: gap between the runs" 0 (link-id t 0 2))
+  (feed t "\r\n" (osc8 "" "http://a/") "ab" (osc8 "" "") (osc8 "" "http://a/") "cd" (osc8 "" ""))
+  (check "osc8: no id, separate links" #f (= (link-id t 1 0) (link-id t 1 2)))
+  (check "osc8: no id, not the id=x link" #f (= (link-id t 1 0) (link-id t 0 0)))
+  (feed t "\r\n" (osc8 "id=x" "http://other/") "ab" (osc8 "id=y" "http://a/") "cd"
+        (osc8 "foo=bar:id=x" "http://a/") "ef" (osc8 "" ""))
+  (check "osc8: same id, other URI" #f (= (link-id t 2 0) (link-id t 0 0)))
+  (check "osc8: other id, same URI" #f (= (link-id t 2 2) (link-id t 0 0)))
+  (check "osc8: id among other parameters" #t (= (link-id t 2 4) (link-id t 0 0)))
+  (check "osc8: a new link replaces the open one" "http://a/" (link-at t 2 2))
+  (check "osc8: links in use" 5 (terminal-link-count t)))
+
+;; invalid links are ignored, and end the open link
+(let ([t (make-term 3 20)])
+  (define long (string-append "http://x/" (make-string (- 2083 9) #\a)))
+  (feed t (osc8 "" long) "a" (osc8 "" (string-append long "b")) "b" (osc8 "" ""))
+  (check "osc8: 2083 bytes" long (link-at t 0 0))
+  (check "osc8: longer URIs are ignored" #f (link-at t 0 1))
+  (feed t (osc8 "" "http://a/") "c" (osc8 "" "http://ä/") "d"
+        (osc8 "" "http://a/") "e" (esc "]8;http://a/\x1b;\\") "f"
+        (osc8 "" "http://a/") "g" (osc8 (string-append "id=" (make-string 257 #\i)) "http://a/") "h"
+        (osc8 "" "http://a/b\tc") "i" (osc8 "" ""))
+  (check "osc8: invalid ones end the link" '("http://a/" #f "http://a/" #f "http://a/" #f #f)
+         (map (lambda (c) (link-at t 0 (+ c 2))) (iota 7))))
+
+;; a link wraps with its text, scrolls into the history, and survives reflow
+(let ([t (make-term 3 10 100)])
+  (feed t "ab" (osc8 "" "http://wrap.example/") "0123456789XYZ" (osc8 "" "") " end")
+  (check "osc8: wrapped" '("ab01234567" "89XYZ end" "") (screen t))
+  (check "osc8: one link across the wrap" #t
+         (and (= (link-id t 0 2) (link-id t 0 9)) (= (link-id t 0 9) (link-id t 1 4))))
+  (check "osc8: not after it" 0 (link-id t 1 5))
+  (feed t "\r\n1\r\n2\r\n3\r\n4")
+  (check "osc8: in the history" "http://wrap.example/" (link-at t -3 5))
+  (check "osc8: in the history, second row" "http://wrap.example/" (link-at t -2 3))
+  (terminal-resize! t 3 7)
+  (let ([g (terminal-grid t)])
+    ;; ab01234 / 56789XY / Z end
+    (check "osc8: reflowed narrower" "ab01234" (row-text t (- (grid-hist-count g))))
+    (check "osc8: reflowed cells keep the link"
+           '(#f #f #t #t #t #t #t)
+           (map (lambda (c) (and (link-at t (- (grid-hist-count g)) c) #t)) (iota 7)))
+    (check "osc8: reflowed, last piece" '(#t #f)
+           (map (lambda (c) (and (link-at t (- 2 (grid-hist-count g)) c) #t)) '(0 1))))
+  (terminal-resize! t 3 30)
+  (let ([row (- (grid-hist-count (terminal-grid t)))])
+    (check "osc8: reflowed wider" "ab0123456789XYZ end" (row-text t row))
+    (check "osc8: reflowed wider, link" (append '(#f #f) (make-list 13 #t) '(#f #f))
+           (map (lambda (c) (and (link-at t row c) #t)) (iota 17)))))
+
+;; the alternate screen has its own cells; the primary screen's links stay
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://main/") "main" (osc8 "" ""))
+  (feed t (esc "[?1049h") (osc8 "" "http://alt/") "alt" (osc8 "" ""))
+  (check "osc8: on the alternate screen" "http://alt/" (link-at t 0 4))
+  (feed t (esc "[?1049l"))
+  (check "osc8: back on the primary screen" "http://main/" (link-at t 0 0)))
+
+;; REP repeats the character with the link; overwriting and erasing drop it
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://r/") "x" (esc "[3b") (osc8 "" "") "yz")
+  (check "osc8: REP" '(#t #t #t #t #f #f) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 6)))
+  (feed t (esc "[1;2H") "o")
+  (check "osc8: overwritten" '(#t #f #t #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;3H") (esc "[1X"))
+  (check "osc8: ECH" '(#t #f #f #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;1H") (esc "[2@"))
+  (check "osc8: ICH moves it" '(#f #f #t #f #f #t) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 6)))
+  (feed t (esc "[3P"))
+  (check "osc8: DCH moves it" '(#f #f #t #f) (map (lambda (c) (and (link-at t 0 c) #t)) (iota 4)))
+  (feed t (esc "[1;3H") (esc "[K"))
+  (check "osc8: EL" #f (link-at t 0 2))
+  (feed t (esc "[H") (osc8 "" "http://r/") "abc" (osc8 "" "") (esc "[2J"))
+  (check "osc8: ED" #f (link-at t 0 0))
+  (feed t (esc "[H") (osc8 "" "http://r/") "abc" (osc8 "" "") (esc "#8"))
+  (check "osc8: DECALN" #f (link-at t 0 0))
+  (check "osc8: nothing left on the screen" '(#f #f #f)
+         (map (lambda (r) (line-extra (grid-line (terminal-grid t) r))) '(0 1 2))))
+
+;; combining marks and wide characters
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://c/") "e\x301;日x" (osc8 "" ""))
+  (check "osc8: combining mark on a linked cell" '("\x301;" "http://c/")
+         (list (line-marks (grid-line (terminal-grid t) 0) 0) (link-at t 0 0)))
+  (check "osc8: wide character: first half" "http://c/" (link-at t 0 1))
+  (check "osc8: wide character: spacer" #f (link-at t 0 2))
+  (check "osc8: after the wide character" "http://c/" (link-at t 0 3))
+  (check "osc8: selection text keeps the mark" "e\x301;日x"
+         (begin (terminal-set-selection! t (vector 'stream (terminal-abs-row t 0) 0 (terminal-abs-row t 0) 3))
+                (selection-text t))))
+
+;; DECSTR ends the link, RIS forgets all of them
+(let ([t (make-term 3 10)])
+  (feed t (osc8 "" "http://s/") "a" (esc "[!p") "b")
+  (check "osc8: DECSTR ends the link" '(#t #f) (map (lambda (c) (and (link-at t 0 c) #t)) '(0 1)))
+  (feed t (osc8 "" "http://s/") "c" (esc "c") "d")
+  (check "osc8: RIS" '(0 #f) (list (terminal-link-count t) (link-at t 0 0))))
+
+;; the number of links is capped (16384): links no cell uses are collected,
+;; then those only the history uses; beyond that, new links are dropped
+(let ([t (make-term 3 10 0)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "\rx"))
+  (check "osc8: table full" 16384 (terminal-link-count t))
+  (feed t (osc8 "" "http://new/") "\ry" (osc8 "" ""))
+  ;; (the last of them was still open)
+  (check "osc8: unused links collected" '(2 "http://new/") (list (terminal-link-count t) (link-at t 0 0))))
+(let ([t (make-term 100 200 0)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "x"))
+  (feed t (osc8 "" "") "\r\n")
+  (check "osc8: full of live links" 16384 (terminal-link-count t))
+  (feed t (osc8 "" "http://dropped/") "y" (osc8 "" ""))
+  (check "osc8: no room: dropped" #f (link-at t (terminal-cursor-row t) 0))
+  (check "osc8: live links kept" "http://0/" (link-at t 0 0)))
+(let ([t (make-term 10 200 1000)])
+  (do ([i 0 (+ i 1)]) ((= i 16384))
+    (feed t (osc8 "" (format "http://~a/" i)) "x"))
+  (feed t (osc8 "" "") (apply string-append (make-list 20 "\r\n")))
+  (check "osc8: links in the history" "http://0/" (link-at t (- (grid-hist-count (terminal-grid t))) 0))
+  (feed t (osc8 "" "http://new/") "y" (osc8 "" ""))
+  (check "osc8: history links make room" "http://new/" (link-at t (terminal-cursor-row t) 0))
+  (check "osc8: history links forgotten" #f (link-at t (- (grid-hist-count (terminal-grid t))) 0)))
+
+;;; underline color (SGR 58/59)
+(define (ul-at t row col) (line-ul-color (grid-line (terminal-grid t) row) col))
+(define (ul-after t sgr)
+  (feed t (esc "[" sgr "m") "x")
+  (ul-at t (terminal-cursor-row t) (- (terminal-cursor-col t) 1)))
+
+(let ([t (make-term 3 40)])
+  (check "ul color: none" #f (ul-after t "4"))
+  (check "ul color: 58:2::r:g:b" (logior COLOR-RGB #x0A141E) (ul-after t "58:2::10:20:30"))
+  (check "ul color: 58:2:r:g:b" (logior COLOR-RGB #x0B151F) (ul-after t "58:2:11:21:31"))
+  (check "ul color: 58;2;r;g;b" (logior COLOR-RGB #x0C1620) (ul-after t "58;2;12;22;32"))
+  (check "ul color: 58:5:n" 196 (ul-after t "58:5:196"))
+  (check "ul color: 58;5;n" 3 (ul-after t "58;5;3"))
+  (check "ul color: white" (logior COLOR-RGB #xFFFFFF) (ul-after t "58:2::255:255:255"))
+  (check "ul color: white, the foreground is kept" (logior COLOR-RGB #xFFFFFF)
+         (begin (ul-after t "38:2::255:255:255")
+                (cell-fg (line-cells (grid-line (terminal-grid t) 0)) (- (terminal-cursor-col t) 1))))
+  (check "ul color: 59" #f (ul-after t "59"))
+  (check "ul color: parameters after it" (list 100 ATTR-BOLD)
+         (list (ul-after t "58;5;100;1")
+               (fxand ATTR-BOLD (cell-attrs (line-cells (grid-line (terminal-grid t) 0))
+                                            (- (terminal-cursor-col t) 1)))))
+  (check "ul color: 0 resets it" #f (ul-after t "0"))
+  (ul-after t "58:5:9")
+  (check "ul color: empty SGR resets it" #f (ul-after t ""))
+  (ul-after t "58:5:9")
+  (check "ul color: kept by other SGRs" 9 (ul-after t "4:3;31;1;22;24"))
+  (check "ul color: 38 does not set it" 9 (ul-after t "38:2::1:2:3")))
+
+;; stored in the upper bits of the cell's foreground field: the other fields,
+;; blank cells and the extras are unchanged
+(let ([a (make-term 3 20)] [b (make-term 3 20)])
+  (feed a (esc "[4;58:2::255:0:0") "m" "red" (esc "[0m") "\r\n" (esc "[58:5:5m") "日x" (esc "[m") "yz")
+  (feed b (esc "[4m") "red" (esc "[0m") "\r\n" "日x" "yz")
+  (check "ul color: only the foreground fields differ" #t
+         (for-all (lambda (r)
+                    (let ([va (line-cells (grid-line (terminal-grid a) r))]
+                          [vb (line-cells (grid-line (terminal-grid b) r))])
+                      (for-all (lambda (i)
+                                 (if (= 1 (mod i 3))
+                                     (= (fxand #x3FFFFFF (fxvector-ref va i)) (fxvector-ref vb i))
+                                     (= (fxvector-ref va i) (fxvector-ref vb i))))
+                               (iota (fxvector-length va)))))
+                  '(0 1 2)))
+  (check "ul color: same colors" #t
+         (equal? (map (lambda (c) (cell-fg (line-cells (grid-line (terminal-grid a) 0)) c)) (iota 20))
+                 (map (lambda (c) (cell-fg (line-cells (grid-line (terminal-grid b) 0)) c)) (iota 20))))
+  (check "ul color: blank cells are all zeros" #t
+         (let ([v (line-cells (grid-line (terminal-grid a) 1))])
+           (for-all (lambda (i) (= 0 (fxvector-ref v (+ 15 i)))) (iota (- 60 15)))))
+  (check "ul color: no extras" '(#f #f) (map (lambda (r) (line-extra (grid-line (terminal-grid a) r))) '(0 1)))
+  (check "ul color: per cell" (list (logior COLOR-RGB #xFF0000) (logior COLOR-RGB #xFF0000) #f)
+         (map (lambda (c) (ul-at a 0 c)) '(0 2 3)))
+  (check "ul color: wide character and after" '(5 5 5 #f) (map (lambda (c) (ul-at a 1 c)) '(0 1 2 3)))
+  (check "ul color: no extras without it" #f (line-extra (grid-line (terminal-grid b) 0))))
+
+;; it goes with its cells: overwritten, erased, scrolled, reflowed
+(let ([t (make-term 3 10 100)])
+  (feed t (esc "[58:5:1m") "abcdefghijklm" (esc "[m"))
+  (check "ul color: wrapped" '(1 1 1 #f) (map (lambda (c) (ul-at t 1 c)) '(0 1 2 3)))
+  (feed t (esc "[1;2H") "X" (esc "[1;4H") (esc "[1X") (esc "[1;8H") (esc "[K"))
+  (check "ul color: overwritten and erased" '(1 #f 1 #f 1 1 1 #f #f #f)
+         (map (lambda (c) (ul-at t 0 c)) (iota 10)))
+  (feed t "\r\n\r\n\r\n\r\n")
+  (check "ul color: in the history" 1 (ul-at t -2 4))
+  (terminal-resize! t 3 5)
+  (let ([row (- (grid-hist-count (terminal-grid t)))])
+    (check "ul color: reflowed" '(1 #f 1 #f 1) (map (lambda (c) (ul-at t row c)) (iota 5)))))
+
+;; with a hyperlink on the same cell; DECSC/DECRC, DECSTR, RIS
+(let ([t (make-term 3 20)])
+  (feed t (esc "]8;;http://u/\x1b;\\") (esc "[58:5:2m") "a" (esc "]8;;\x1b;\\") "b")
+  (check "ul color: with a link" '(2 "http://u/" 2 #f) (list (ul-at t 0 0) (link-at t 0 0) (ul-at t 0 1) (link-at t 0 1)))
+  (feed t (esc "7") (esc "[59m") "c")
+  (check "ul color: before DECRC" #f (ul-at t 0 2))
+  (feed t (esc "8") "d")
+  (check "ul color: DECRC restores it" 2 (ul-at t 0 2))
+  (feed t (esc "[!p") "e")
+  (check "ul color: DECSTR" #f (ul-at t 0 3))
+  (feed t (esc "[58:5:2m") (esc "c") "f")
+  (check "ul color: RIS" #f (ul-at t 0 0)))
+
+;; DECRQSS reports SGR, underline color included
+(let ([t (make-term 3 20)])
+  (define (sgr-report)
+    (set! responses '())
+    (feed t (esc "P$qm") (esc "\\"))
+    (car responses))
+  (check "DECRQSS m: default" "\x1b;P1$r0m\x1b;\\" (sgr-report))
+  (feed t (esc "[1;3;4:3;7;9;31;104;58:2::1:2:3m"))
+  (check "DECRQSS m: attributes and colors" "\x1b;P1$r0;1;3;4:3;7;9;31;104;58:2:1:2:3m\x1b;\\" (sgr-report))
+  (feed t (esc "[0;2;4;5;8;38:5:200;48:2::10:20:30;58:5:9m"))
+  (check "DECRQSS m: extended colors" "\x1b;P1$r0;2;4;5;8;38:5:200;48:2:10:20:30;58:5:9m\x1b;\\" (sgr-report))
+  (feed t (esc "[0;58;5;3m"))
+  (check "DECRQSS m: palette underline color" "\x1b;P1$r0;58:5:3m\x1b;\\" (sgr-report))
+  (feed t (esc "[59m"))
+  (check "DECRQSS m: 59" "\x1b;P1$r0m\x1b;\\" (sgr-report))
+  (feed t (esc "[58:2::1:2:3m"))
+  (feed-bytes t (let ([s (sgr-report)])
+                  (string->utf8 (string-append (esc "[0m") "\x1b;[" (substring s 5 (- (string-length s) 2))))))
+  (feed t "x")
+  (check "DECRQSS m: the report restores it" (logior COLOR-RGB #x010203)
+         (ul-at t (terminal-cursor-row t) (- (terminal-cursor-col t) 1))))
+
 ;;; selection text
 (let* ([t (make-term 4 10)]
        [sel (lambda (mode a ac b bc)
@@ -455,6 +712,37 @@
   (feed t "see https://example.com/a?b=1, ok")
   (check "url at" "https://example.com/a?b=1" (url-at t (cons (terminal-abs-row t 0) 10)))
   (check "no url" #f (url-at t (cons (terminal-abs-row t 0) 1))))
+
+;; OSC 8 links: url-at finds an explicit link first, then URLs in the text
+(let ([t (make-term 3 80)] [pt (lambda (t row col) (cons (terminal-abs-row t row) col))])
+  (feed t (osc8 "" "https://explicit.example/") "see https://text.example/" (osc8 "" "")
+        " https://plain.example/ " (osc8 "" "file://host/tmp/x") "日本" (osc8 "" "") "\r\n"
+        (osc8 "id=j" "javascript:alert(1)") "js" (osc8 "" "") " " (osc8 "id=j" "javascript:alert(1)")
+        "js" (osc8 "" ""))
+  (check "url-at: explicit link" "https://explicit.example/" (url-at t (pt t 0 0)))
+  (check "url-at: explicit link over a URL in its text" "https://explicit.example/" (url-at t (pt t 0 8)))
+  (check "url-at: URL in the text" "https://plain.example/" (url-at t (pt t 0 26)))
+  (check "url-at: wide character, second half" "file://host/tmp/x" (url-at t (pt t 0 50)))
+  (check "url-at: nothing" #f (url-at t (pt t 2 0)))
+  (check "url-at: scheme not allowed, still found" "javascript:alert(1)" (url-at t (pt t 1 0)))
+  (check "link-id-at: none" 0 (link-id-at t (pt t 0 25)))
+  (check "link-ranges: one run" '((0 25)) (link-ranges t (link-id-at t (pt t 0 3)) (terminal-abs-row t 0)))
+  (check "link-ranges: wide characters" '((49 53))
+         (link-ranges t (link-id-at t (pt t 0 50)) (terminal-abs-row t 0)))
+  (check "link-ranges: same id, two runs" '((0 2) (3 5))
+         (link-ranges t (link-id-at t (pt t 1 0)) (terminal-abs-row t 1)))
+  (check "link-ranges: other row" '() (link-ranges t (link-id-at t (pt t 1 0)) (terminal-abs-row t 0)))
+  (terminal-resize! t 3 30)
+  (check "url-at: after reflow" "https://explicit.example/" (url-at t (pt t 0 4)))
+  (check "url-at: after reflow, wrapped part" "file://host/tmp/x" (url-at t (pt t 1 20))))
+
+;; Ctrl+click only opens these schemes
+(for-each
+ (lambda (u ok)
+   (check (format "openable-url? ~a" u) ok (openable-url? u)))
+ '("http://a/" "https://a/" "HTTPS://a/" "ftp://a/" "file:///tmp/x" "mailto:a@b" "javascript:alert(1)"
+   "ssh://host" "data:text/html,x" "x-man-page://ls" "no-scheme" "" "https")
+ '(#t #t #t #t #t #t #f #f #f #f #f #f #f))
 
 ;;; kitty keyboard protocol: flags stacks and their control sequences
 (let ([t (make-term 3 10)])
@@ -530,6 +818,25 @@
   (feed t (esc "[?1049l"))
   (feed t (esc "[<u"))
   (check "kbd: RIS empties the primary stack" 0 (terminal-keyboard-flags t)))
+
+;; DECSTR (soft reset) empties both stacks too, as in kitty, but stays on
+;; the alternate screen
+(let ([t (make-term 3 10)])
+  (feed t (esc "[>5u") (esc "[>1u") (esc "[?1049h") (esc "[>15u"))
+  (feed t (esc "[!p"))
+  (check "kbd: DECSTR resets the current stack" 0 (terminal-keyboard-flags t))
+  (check "kbd: DECSTR stays on the alternate screen" #t (terminal-alt-screen? t))
+  (set! responses '())
+  (feed t (esc "[?u"))
+  (check "kbd: query after DECSTR" '("\x1b;[?0u") responses)
+  (feed t (esc "[?1049l"))
+  (check "kbd: DECSTR resets the primary stack" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[<u"))
+  (check "kbd: DECSTR empties the primary stack" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[>3u") (esc "[<u"))
+  (check "kbd: push and pop after DECSTR" 0 (terminal-keyboard-flags t))
+  (feed t (esc "[=7u"))
+  (check "kbd: set after DECSTR" 7 (terminal-keyboard-flags t)))
 
 (let ([t (make-term 3 10)])
   ;; CSI u without a prefix is still SCORC
@@ -691,6 +998,114 @@
   (mods! 0 0 0)
   (check "xkb: Up release" "\x1b;[1;1:3A" (enc 2 (release UP)))
   (check "xkb: Up repeat" "\x1b;[1;1:2A" (enc 2 (key-event-with-type (press UP) KEY-REPEAT))))
+
+;;; Hyper and Meta: which real modifier each modifier class maps to is
+;;; found by pressing the keymap's keys (see modifier-mapping)
+(let ()
+  ;; a keymap whose modifier keys set modifiers, with Hyper and Meta on the
+  ;; real modifiers given, and optionally a second Alt key on another one
+  (define (keymap hyper meta alt-r)
+    (format "xkb_keymap {
+  xkb_keycodes { minimum = 8; maximum = 255;
+    <LFSH> = 50; <LCTL> = 37; <LALT> = 64; <LWIN> = 133; <CAPS> = 66; <NMLK> = 77;
+    <AC01> = 38; <HYPR> = 207; <META> = 205; <RALT> = 108; };
+  xkb_types {
+    type \"ONE_LEVEL\" { modifiers = none; level_name[Level1] = \"Any\"; };
+    type \"ALPHABETIC\" { modifiers = Shift+Lock; map[Shift] = Level2; map[Lock] = Level2;
+      level_name[Level1] = \"Base\"; level_name[Level2] = \"Caps\"; };
+  };
+  xkb_compat {
+    interpret Caps_Lock { action = LockMods(modifiers = modMapMods); };
+    interpret Num_Lock { action = LockMods(modifiers = modMapMods); };
+    interpret Any + AnyOf(all) { action = SetMods(modifiers = modMapMods); };
+  };
+  xkb_symbols {
+    key <LFSH> { [ Shift_L ] }; key <LCTL> { [ Control_L ] }; key <LALT> { [ Alt_L ] };
+    key <RALT> { [ Alt_R ] }; key <LWIN> { [ Super_L ] }; key <CAPS> { [ Caps_Lock ] };
+    key <NMLK> { [ Num_Lock ] }; key <HYPR> { [ Hyper_L ] }; key <META> { [ Meta_L ] };
+    key <AC01> { type = \"ALPHABETIC\", [ a, A ] };
+    modifier_map Shift { <LFSH> }; modifier_map Lock { <CAPS> };
+    modifier_map Control { <LCTL> }; modifier_map Mod1 { <LALT> };
+    modifier_map ~a { <RALT> }; modifier_map Mod2 { <NMLK> }; modifier_map Mod4 { <LWIN> };
+    modifier_map ~a { <HYPR> }; modifier_map ~a { <META> };
+  };
+};" alt-r hyper meta))
+  ;; evdev keycodes, and xkb's real modifier masks
+  (define LSHIFT 42) (define LCTL 29) (define LALT 56) (define LWIN 125) (define CAPS 58)
+  (define NUMLOCK 69) (define KA 30) (define HYPER 199) (define META 197)
+  (define shift 1) (define lock 2) (define control 4) (define mod1 8) (define mod2 16)
+  (define mod3 32) (define mod4 64) (define mod5 128)
+  (define (sym name) (xkb_keysym_from_name name 0))
+  (define (keyboard-with km)
+    (let ([kb (make-keyboard)]) (keyboard-set-keymap-string! kb km) kb))
+  (define (mods kb depressed . locked)
+    (keyboard-update-modifiers! kb depressed 0 (if (pair? locked) (car locked) 0) 0)
+    (list (keyboard-mods kb) (keyboard-locks kb)))
+  (define (press kb key) (keyboard-translate kb key KEY-PRESS))
+  (define (release kb key) (keyboard-translate kb key KEY-RELEASE))
+  (define (enc flags ev) (encode-key ev #f #f #f flags))
+
+  ;; the usual layout: Hyper shares Mod4 with Super, Meta shares Mod1 with Alt
+  (let ([kb (keyboard-with (keymap "Mod4" "Mod1" "Mod1"))])
+    (check "mods: shift" (list MOD-SHIFT 0) (mods kb shift))
+    (check "mods: ctrl" (list MOD-CTRL 0) (mods kb control))
+    (check "mods: Mod1 is Alt only" (list MOD-ALT 0) (mods kb mod1))
+    (check "mods: Mod4 is Super only" (list MOD-SUPER 0) (mods kb mod4))
+    (check "mods: locks" (list 0 (logior MOD-CAPS-LOCK MOD-NUM-LOCK)) (mods kb 0 (logior lock mod2)))
+    (check "mods: Mod3 and Mod5 are nothing" (list 0 0) (mods kb (logior mod3 mod5)))
+    (mods kb 0)
+    (check "mods: Hyper_L on Super's modifier sets Super"
+           (list MOD-SUPER (sym "Hyper_L")) (let ([e (press kb HYPER)]) (list (key-event-mods e) (key-event-key e))))
+    (check "mods: Hyper_L, all keys" "\x1b;[57445;9u" (begin (release kb HYPER) (enc 8 (press kb HYPER))))
+    (release kb HYPER)
+    (check "mods: Meta_L on Alt's modifier sets Alt" "\x1b;[57446;3u" (enc 8 (press kb META)))
+    (release kb META)
+    (check "mods: Super_L" "\x1b;[57444;9u" (enc 8 (press kb LWIN))))
+
+  ;; Hyper on Mod3 and Meta on Mod5, modifiers of their own
+  (let ([kb (keyboard-with (keymap "Mod3" "Mod5" "Mod1"))])
+    (check "mods: Mod3 is Hyper" (list MOD-HYPER 0) (mods kb mod3))
+    (check "mods: Mod5 is Meta" (list MOD-META 0) (mods kb mod5))
+    (check "mods: Mod4 is still Super" (list MOD-SUPER 0) (mods kb mod4))
+    (check "mods: Hyper+Super+Ctrl" (list (logior MOD-HYPER MOD-SUPER MOD-CTRL) 0)
+           (mods kb (logior mod3 mod4 control)))
+    (mods kb mod3)
+    (let ([e (press kb KA)])
+      (check "mods: hyper+a" (list "a" MOD-HYPER) (list (key-event-text e) (key-event-mods e)))
+      (check "mods: hyper+a, disambiguated" "\x1b;[97;17u" (enc 1 e))
+      (check "mods: hyper+a, legacy ignores Hyper" "a" (enc 0 e))
+      (check "mods: hyper+a, bindings ignore Hyper" 0 (key-event-legacy-mods e)))
+    (mods kb (logior mod5 control))
+    (let ([e (press kb KA)])
+      (check "mods: ctrl+meta+a, disambiguated" "\x1b;[97;37u" (enc 1 e))
+      (check "mods: ctrl+meta+a, legacy" "\x1;" (enc 0 e))
+      (check "mods: ctrl+meta+a, bindings see Ctrl" MOD-CTRL (key-event-legacy-mods e)))
+    (mods kb 0)
+    (check "mods: Hyper_L press" "\x1b;[57445;17u" (enc 8 (press kb HYPER)))
+    (mods kb mod3)
+    (check "mods: Hyper_L release" "\x1b;[57445;1:3u" (enc 10 (release kb HYPER)))
+    (mods kb 0)
+    (check "mods: Meta_L press" "\x1b;[57446;33u" (enc 8 (press kb META)))
+    (mods kb mod5)
+    (check "mods: Meta_L release" "\x1b;[57446;1:3u" (enc 10 (release kb META)))
+    (mods kb 0)
+    (check "mods: Hyper_L, legacy" #f (enc 0 (press kb HYPER)))
+    (release kb HYPER)
+    ;; leaving the window forgets modifiers and held modifier keys
+    (mods kb (logior mod3 control) lock)
+    (press kb LCTL)
+    (keyboard-reset-modifiers! kb)
+    (check "mods: reset" (list 0 0) (list (keyboard-mods kb) (keyboard-locks kb)))
+    (check "mods: a after reset" 0 (key-event-mods (press kb KA))))
+
+  ;; two Alt keys on different modifiers: no reliable mapping, so modifiers
+  ;; are taken by name and Hyper and Meta are not reported
+  (let ([kb (keyboard-with (keymap "Mod3" "Mod5" "Mod3"))])
+    (check "mods: fallback: Mod1 is Alt" (list MOD-ALT 0) (mods kb mod1))
+    (check "mods: fallback: Mod3 is nothing" (list 0 0) (mods kb mod3))
+    (check "mods: fallback: Mod4 is Super" (list MOD-SUPER 0) (mods kb mod4))
+    (mods kb 0)
+    (check "mods: fallback: Hyper_L sets nothing" "\x1b;[57445u" (enc 8 (press kb HYPER)))))
 
 ;;; kitty keyboard protocol: encoding
 (let ()
@@ -1081,7 +1496,55 @@
                    expected
                    (apply encode-key (make-key-event (keysym-by-name sym) text mods) modes))))
         legacy-mods (list-ref row 5))))
+   legacy-key-table)
+  ;; kitty-keyboard-legacy-csi-u changes none of these, except keys that
+  ;; sent nothing
+  (for-each
+   (lambda (row)
+     (let ([modes (list-ref row 4)])
+       (for-each
+        (lambda (mods expected)
+          (let* ([shift (logtest mods MOD-SHIFT)]
+                 [sym (if shift (list-ref row 2) (list-ref row 0))]
+                 [text (ctrl-text (if shift (list-ref row 3) (list-ref row 1)) mods)])
+            (when expected
+              (check (format "legacy key ~a mods ~a modes ~a, legacy CSI u" (car row) mods modes)
+                     expected
+                     (apply encode-key (make-key-event (keysym-by-name sym) text mods)
+                            (append modes (list 0 #t)))))))
+        legacy-mods (list-ref row 5))))
    legacy-key-table))
+
+;;; keys without a legacy encoding: nothing by default, CSI u (as kitty sends
+;;; with flags 0) with kitty-keyboard-legacy-csi-u
+(let ()
+  (define (sym name) (xkb_keysym_from_name name 0))     ; case-sensitive
+  (define (enc name mods csi-u . type)
+    (encode-key (let ([ev (make-key-event (sym name) "" mods)])
+                  (if (pair? type) (key-event-with-type ev (car type)) ev))
+                #f #f #f 0 csi-u))
+  (for-each
+   (lambda (k)
+     (let ([name (car k)] [mods (cadr k)] [bytes (caddr k)])
+       (check (format "legacy CSI u: ~a mods ~a, off" name mods) #f (enc name mods #f))
+       (check (format "legacy CSI u: ~a mods ~a" name mods) bytes (enc name mods #t))))
+   `(("XF86AudioPlay" 0 "\x1b;[57428u") ("XF86AudioMute" 0 "\x1b;[57440u")
+     ("XF86AudioRaiseVolume" ,MOD-CTRL "\x1b;[57439;5u") ("XF86AudioNext" ,MOD-SHIFT "\x1b;[57435;2u")
+     ("Menu" 0 "\x1b;[29~") ("Menu" ,MOD-ALT "\x1b;[29;3~")
+     ("Print" 0 "\x1b;[57361u") ("Pause" 0 "\x1b;[57362u") ("Scroll_Lock" 0 "\x1b;[57359u")
+     ("F21" 0 "\x1b;[57384u") ("F35" 0 "\x1b;[57398u") ("F24" ,MOD-SHIFT "\x1b;[57387;2u")
+     ("F30" ,(logior MOD-CTRL MOD-ALT) "\x1b;[57393;7u") ("F21" ,MOD-HYPER "\x1b;[57384;17u")))
+  (check "legacy CSI u: no release" #f (enc "XF86AudioPlay" 0 #t KEY-RELEASE))
+  (check "legacy CSI u: repeat" "\x1b;[57428u" (enc "XF86AudioPlay" 0 #t KEY-REPEAT))
+  (for-each
+   (lambda (name)
+     (check (format "legacy CSI u: modifier key ~a" name) #f (enc name 0 #t)))
+   '("Shift_L" "Control_R" "Alt_L" "Super_L" "Hyper_L" "Meta_R" "Caps_Lock" "Num_Lock"
+     "ISO_Level3_Shift"))
+  (check "legacy CSI u: F13 keeps its legacy code" "\x1b;[25~" (enc "F13" 0 #t))
+  (check "legacy CSI u: F20 keeps its legacy code" "\x1b;[34;5~" (enc "F20" MOD-CTRL #t))
+  (check "legacy CSI u: Up keeps its legacy code" "\x1b;[1;5A" (enc "Up" MOD-CTRL #t))
+  (check "legacy CSI u: a key without a kitty number" #f (enc "XF86Calculator" 0 #t)))
 
 ;;; TERM selection
 (let* ([env (lambda (alist) (lambda (k) (let ([e (assoc k alist)]) (and e (cdr e)))))]
@@ -1160,6 +1623,70 @@
     (feed t (esc "[?5h"))
     (check "DECSCNM redraws" #t (pair? (renderer-render! r t #t #t (lambda (a) '()) #f)))
     (check "DECSCNM = fresh" #t (equal? (snapshot r) (fresh-render t))))
+  ;; underline colors: every style is drawn in the underline color when the
+  ;; cell has one, otherwise in the foreground color
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [cw (font-cell-width f)] [chh (font-cell-height f)]
+         [colors-in (lambda (row c0 c1)
+                      (let loop ([y (+ 3 (* row chh))] [x (+ 3 (* c0 cw))] [acc '()])
+                        (cond [(= y (+ 3 (* (+ row 1) chh))) acc]
+                              [(= x (+ 3 (* c1 cw))) (loop (+ y 1) (+ 3 (* c0 cw)) acc)]
+                              [else
+                               (let ([p (logand #xFFFFFF (foreign-ref 'unsigned-32 (renderer-pixels r)
+                                                                      (* 4 (+ x (* y (renderer-width r))))))])
+                                 (loop y (+ x 1) (if (memv p acc) acc (cons p acc))))])))]
+         [styles (lambda (ul)
+                   (apply string-append
+                          (map (lambda (s) (string-append (esc (format "[4:~a~am" s ul)) "  " (esc "[24m") " "))
+                               '(1 2 3 4 5))))])
+    (renderer-resize! r (+ 6 (* 20 cw)) (+ 6 (* 6 chh)))
+    (feed t (esc "[38:2::255:0:0m") (styles ";58:2::0:200:0") "\r\n" (styles ";59") "\r\n"
+          (styles ";58:5:21") "\r\n" (esc "[8;4;58:2::0:200:0m") "  " (esc "[m"))
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: render = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (for-each
+     (lambda (s)
+       (let ([c0 (* 3 (- s 1))])
+         (check (format "ul color: style ~a in the underline color" s) '(#x00C800 #x000000)
+                (list-sort > (colors-in 0 c0 (+ c0 2))))
+         (check (format "ul color: style ~a in the foreground" s) '(#xFF0000 #x000000)
+                (list-sort > (colors-in 1 c0 (+ c0 2))))
+         (check (format "ul color: style ~a in a palette color" s) '(#x0000FF #x000000)
+                (list-sort > (colors-in 2 c0 (+ c0 2))))))
+     '(1 2 3 4 5))
+    (check "ul color: hidden cells show no underline color" #f (memv #x00C800 (colors-in 3 0 2)))
+    ;; only the underline color changes: the row is redrawn
+    (feed t (esc "[1;1H") (esc "[4;58:2::0:0:255m") "  " (esc "[2;7H") (esc "[4:3;58:5:21m") "  ")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: changed = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (check "ul color: changed color drawn" '(#x0000FF #x000000) (list-sort > (colors-in 0 0 2)))
+    (feed t (esc "[1;1H") (esc "[59m") "  ")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: reset = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (feed t "\r\n\r\n\r\n\r\n")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (check "ul color: scrolled = fresh" #t (equal? (snapshot r) (fresh-render t)))
+    (renderer-free! r))
+  ;; a hovered link is underlined through the highlights
+  (let* ([t (make-term 6 20)]
+         [r (make-renderer f 3 3 1.0 #f #f #x444444 #t)]
+         [hl (lambda (a) (if (= a (terminal-abs-row t 1)) '((2 6 link) (8 10 link)) '()))]
+         [fresh (lambda (hl)
+                  (let ([r (make-renderer f 3 3 1.0 #f #f #x444444 #t)])
+                    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+                    (renderer-render! r t #t #t hl #f)
+                    (let ([s (snapshot r)]) (renderer-free! r) s)))])
+    (renderer-resize! r (+ 6 (* 20 (font-cell-width f))) (+ 6 (* 6 (font-cell-height f))))
+    (feed t "row 0\r\n" (osc8 "id=a" "http://a/") "ab" (osc8 "" "") "linked 日本 text")
+    (renderer-render! r t #t #t (lambda (a) '()) #f)
+    (let ([before (snapshot r)])
+      (renderer-render! r t #t #t hl #f)
+      (check "hovered link = fresh" #t (equal? (snapshot r) (fresh hl)))
+      (check "hovered link drawn" #f (equal? (snapshot r) before))
+      (renderer-render! r t #t #t (lambda (a) '()) #f)
+      (check "hover ends = fresh" #t (equal? (snapshot r) before)))
+    (renderer-free! r))
   ;; a full redraw sets every pixel, also in a window that is not a whole
   ;; number of cells and has more rows and columns than the terminal
   (let ([t (make-term 4 15)])

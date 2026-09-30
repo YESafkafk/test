@@ -15,7 +15,8 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   state machine, UTF-8). Supported:
   - cursor movement, erase, insert/delete of characters and lines, scroll regions, tab stops, `REP`
   - SGR with 16, 256 and 24-bit colors, bold, dim, italic, reverse, hidden, strikethrough,
-    and underline styles (single, double, curly, dotted, dashed; `4:x`)
+    underline styles (single, double, curly, dotted, dashed; `4:x`) and underline
+    colors (`58`/`59`)
   - alternate screen (`47`/`1047`/`1049`), `DECSC`/`DECRC`, origin mode, autowrap, insert mode
   - DEC special graphics (line drawing) charset
   - wide (CJK, emoji) and combining characters
@@ -24,7 +25,7 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
     encodings, alternate scroll
   - cursor shapes and blinking (`DECSCUSR`)
   - OSC 0/2 title, OSC 4/10/11/12 color set/query/reset, OSC 7 working directory,
-    OSC 52 clipboard (write only)
+    OSC 8 hyperlinks, OSC 52 clipboard (write only)
   - device status/attributes (`DSR`, `CPR`, `DA1`, `DA2`, `XTVERSION`), `DECRQM`,
     `DECRQSS`, window size reports, title stack
 - **Scrollback** (configurable size), which stays in place while new output
@@ -35,7 +36,11 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   (`zwp_primary_selection_v1`): copy on select, middle-click paste, Ctrl+Shift+C/V.
 - **Search** through the scrollback (Ctrl+Shift+F / Ctrl+Shift+B), with all
   matches highlighted.
-- **Ctrl+click on URLs** opens them with `xdg-open`.
+- **Ctrl+click on links and URLs** opens them with `xdg-open`: OSC 8
+  hyperlinks first, then URLs found in the text. Only `http`, `https`,
+  `ftp`, `file` and `mailto` URIs are opened, since an OSC 8 link's URI comes
+  from the program. Holding Ctrl over a link underlines all of it, also
+  where it continues on another row.
 - **Fonts** through fontconfig and FreeType: bold/italic faces, or synthesized
   ones when the family has none, per-character fallback fonts, color emoji
   (CBDT bitmaps scaled to the cell), runtime font size changes.
@@ -50,8 +55,9 @@ c2ffi turns the C headers into JSON, and a Scheme generator turns the JSON into 
   with all five progressive enhancements (disambiguated escape codes, press,
   repeat and release events, shifted and base-layout keys, all keys as escape
   codes, associated text), a flags stack per screen, and the `CSI ? u` query.
-  Programs such as Neovim, Helix, kakoune and fish use it to tell apart keys
-  like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
+  Hyper and Meta are reported when the keymap puts them on a modifier of
+  their own. Programs such as Neovim, Helix, kakoune and fish use it to tell
+  apart keys like Ctrl+I and Tab. The `kitty-keyboard` option turns it off.
 - Configurable key bindings, colors, padding, cursor and more, with **live
   reload**: saving the configuration file applies it immediately (inotify).
 - Spawning a new instance in the current working directory (Ctrl+Shift+N).
@@ -196,6 +202,12 @@ ignores its control sequences and does not answer `CSI ? u`, so programs keep
 to the legacy (xterm) key encoding. Keys that trigger a chezterm binding are
 never sent, and neither are their releases.
 
+`(kitty-keyboard-legacy-csi-u #t)` sends keys that have no legacy encoding,
+and so send nothing by default, the way kitty does even while a program has
+not asked for the protocol: media keys, Print, Pause, Scroll Lock and
+F21–F35 as `CSI u` (e.g. `CSI 57428 u` for Play), and Menu as `CSI 29 ~`.
+Every other key is encoded exactly as before.
+
 ### Terminfo
 
 [`terminfo/chezterm.terminfo`](terminfo/chezterm.terminfo) defines two
@@ -204,7 +216,7 @@ entries:
 - `chezterm-direct`: `setaf`/`setab` take 24-bit values (ncurses `RGB`).
 
 Beyond the usual xterm capabilities they advertise:
-- underline styles (`Smulx`)
+- underline styles and colors (`Smulx`, `Setulc`)
 - synchronized output (`Sync`)
 - cursor shapes (`Ss`/`Se`) and cursor color (`Cs`/`Cr`)
 - the clipboard (`Ms`)
@@ -254,7 +266,7 @@ Alternatively, set `(term "xterm-256color")` in the configuration.
 
 Mouse: drag to select, double/triple click for words/lines, Ctrl+drag for a block,
 right click to extend. Hold Shift to select while an application uses the mouse.
-Ctrl+click opens URLs.
+Ctrl+click opens links and URLs.
 
 ## How it is built
 
@@ -319,10 +331,8 @@ full 250×75 screen of colored text (2254×1354 pixels) takes about 5.6 ms. See
   window has no title bar.
 - Fractional scaling is rounded to the next integer scale.
 - No Alacritty vi mode, hints UI or IME (`text-input-v3`).
-- The kitty keyboard protocol reports no Hyper and Meta modifiers (see the
-  roadmap).
-- Underline colors (SGR 58) are parsed but not drawn, so the terminfo entry
-  does not advertise `Setulc`.
+- The kitty keyboard protocol reports Hyper and Meta only when they have a
+  modifier of their own; most keymaps share them with Super and Alt.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) describes how these could be addressed,
 including a possible GPU backend.
