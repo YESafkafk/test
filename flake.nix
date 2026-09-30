@@ -267,8 +267,8 @@
           # Package build; its installCheck runs `chezterm --version`.
           chezterm = packages.chezterm;
 
-          # Both passes of `make test`: from source with run-time checks and
-          # against the optimized build.
+          # Both passes of `make test`: from source and against the compiled
+          # build.
           tests = packages.chezterm.overrideAttrs {
             pname = "chezterm-tests";
             doCheck = true;

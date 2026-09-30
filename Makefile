@@ -93,8 +93,7 @@ $(BUILD)/chezterm: $(SRC)
 run: all
 	$(BUILD)/chezterm
 
-# The suite runs twice: from source with run-time checks, and against the
-# optimized build (hot paths at optimize-level 3).
+# The suite runs twice: from source, and against the compiled build.
 test: all
 	$(SCHEME) -q --libdirs src --script tests/run.ss
 	$(SCHEME) -q --libdirs $(BUILD)/lib --script tests/run.ss
