@@ -105,8 +105,9 @@
      (mutable link-gc-pause)
      ;; the cell extra printed characters get (see grid.ss), #f for none
      (mutable pen-extra)
-     ;; underline color (SGR 58), #f for the foreground
-     (mutable ul-color))
+     ;; underline color (SGR 58), #f for the foreground, and what it adds to
+     ;; the foreground field of printed cells (see ul-field)
+     (mutable ul-color) (mutable ul-bits))
     (protocol
      (lambda (new)
        (lambda (rows cols history palette cursor-style cursor-blink)
@@ -135,7 +136,7 @@
                        #f
                        #t '() '()
                        (make-eqv-hashtable) (make-hashtable equal-hash equal?) 1 0 0
-                       #f #f)])
+                       #f #f 0)])
            (terminal-grid-set! t (terminal-primary-grid t))
            t)))))
 
@@ -422,7 +423,7 @@
                 (insert-blanks! t w))
               (fix-wide-edges! t l col (fx+ col w))
               (line-extra-delete! l col (fx+ col 1))
-              (let ([attrs (terminal-attrs t)] [fg (terminal-fg t)] [bg (terminal-bg t)])
+              (let ([attrs (terminal-attrs t)] [fg (pen-fg t)] [bg (terminal-bg t)])
                 (if (fx= w 2)
                     (begin
                       (cell-set! v col cp (fxior attrs ATTR-WIDE) fg bg)
@@ -452,7 +453,7 @@
                        [l (cur-line t)]
                        [v (line-cells l)]
                        [attrs (fxsll (terminal-attrs t) 21)]
-                       [fg (fg-field (terminal-fg t))]
+                       [fg (fg-field (pen-fg t))]
                        [bg (bg-field (terminal-bg t))])
                   (when (terminal-selection t) (touch-row! t (terminal-cursor-row t)))
                   (fix-wide-edges! t l col (fx+ col n))
@@ -1098,11 +1099,12 @@
     (terminal-attrs-set! t (fxior (fxand (terminal-attrs t) (fxnot ATTR-UNDERLINE-MASK))
                                   (fxsll style ATTR-UNDERLINE-SHIFT))))
 
-  ;; The underline color is kept in cell extras, like hyperlinks.
   (define (set-ul-color! t c)
-    (unless (eqv? c (terminal-ul-color t))
-      (terminal-ul-color-set! t c)
-      (update-pen! t)))
+    (terminal-ul-color-set! t c)
+    (terminal-ul-bits-set! t (ul-field c)))
+
+  ;; the foreground printed cells get, with the underline color
+  (define (pen-fg t) (fxior (terminal-fg t) (terminal-ul-bits t)))
 
   (define (attr-on! t a) (terminal-attrs-set! t (fxior (terminal-attrs t) a)))
   (define (attr-off! t a) (terminal-attrs-set! t (fxand (terminal-attrs t) (fxnot a))))
@@ -1319,7 +1321,7 @@
     (update-pen! t))
 
   (define (update-pen! t)
-    (terminal-pen-extra-set! t (make-extra "" (terminal-link t) (terminal-ul-color t))))
+    (terminal-pen-extra-set! t (make-extra "" (terminal-link t))))
 
   ;; The id for a new link to URI (with id parameter ID, or #f), or 0 when
   ;; there is no room for it.
@@ -1456,7 +1458,7 @@
     (terminal-attrs-set! t 0)
     (terminal-fg-set! t COLOR-FG)
     (terminal-bg-set! t COLOR-BG)
-    (terminal-ul-color-set! t #f)
+    (set-ul-color! t #f)
     (terminal-charsets-set! t (vector 'ascii 'ascii 'ascii 'ascii))
     (terminal-gl-set! t 0)
     (terminal-saved-primary-set! t #f)

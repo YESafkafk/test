@@ -600,9 +600,15 @@
   (check "ul color: 58;2;r;g;b" (logior COLOR-RGB #x0C1620) (ul-after t "58;2;12;22;32"))
   (check "ul color: 58:5:n" 196 (ul-after t "58:5:196"))
   (check "ul color: 58;5;n" 3 (ul-after t "58;5;3"))
+  (check "ul color: white" (logior COLOR-RGB #xFFFFFF) (ul-after t "58:2::255:255:255"))
+  (check "ul color: white, the foreground is kept" (logior COLOR-RGB #xFFFFFF)
+         (begin (ul-after t "38:2::255:255:255")
+                (cell-fg (line-cells (grid-line (terminal-grid t) 0)) (- (terminal-cursor-col t) 1))))
   (check "ul color: 59" #f (ul-after t "59"))
   (check "ul color: parameters after it" (list 100 ATTR-BOLD)
-         (list (ul-after t "58;5;100;1") (fxand ATTR-BOLD (cell-attrs (line-cells (grid-line (terminal-grid t) 0)) 7))))
+         (list (ul-after t "58;5;100;1")
+               (fxand ATTR-BOLD (cell-attrs (line-cells (grid-line (terminal-grid t) 0))
+                                            (- (terminal-cursor-col t) 1)))))
   (check "ul color: 0 resets it" #f (ul-after t "0"))
   (ul-after t "58:5:9")
   (check "ul color: empty SGR resets it" #f (ul-after t ""))
@@ -610,17 +616,31 @@
   (check "ul color: kept by other SGRs" 9 (ul-after t "4:3;31;1;22;24"))
   (check "ul color: 38 does not set it" 9 (ul-after t "38:2::1:2:3")))
 
-;; stored in the cell extras: cells and blank cells are unchanged
+;; stored in the upper bits of the cell's foreground field: the other fields,
+;; blank cells and the extras are unchanged
 (let ([a (make-term 3 20)] [b (make-term 3 20)])
   (feed a (esc "[4;58:2::255:0:0") "m" "red" (esc "[0m") "\r\n" (esc "[58:5:5m") "日x" (esc "[m") "yz")
   (feed b (esc "[4m") "red" (esc "[0m") "\r\n" "日x" "yz")
-  (check "ul color: cells unchanged" #t
-         (for-all (lambda (r) (equal? (line-cells (grid-line (terminal-grid a) r))
-                                      (line-cells (grid-line (terminal-grid b) r))))
+  (check "ul color: only the foreground fields differ" #t
+         (for-all (lambda (r)
+                    (let ([va (line-cells (grid-line (terminal-grid a) r))]
+                          [vb (line-cells (grid-line (terminal-grid b) r))])
+                      (for-all (lambda (i)
+                                 (if (= 1 (mod i 3))
+                                     (= (fxand #x3FFFFFF (fxvector-ref va i)) (fxvector-ref vb i))
+                                     (= (fxvector-ref va i) (fxvector-ref vb i))))
+                               (iota (fxvector-length va)))))
                   '(0 1 2)))
+  (check "ul color: same colors" #t
+         (equal? (map (lambda (c) (cell-fg (line-cells (grid-line (terminal-grid a) 0)) c)) (iota 20))
+                 (map (lambda (c) (cell-fg (line-cells (grid-line (terminal-grid b) 0)) c)) (iota 20))))
+  (check "ul color: blank cells are all zeros" #t
+         (let ([v (line-cells (grid-line (terminal-grid a) 1))])
+           (for-all (lambda (i) (= 0 (fxvector-ref v (+ 15 i)))) (iota (- 60 15)))))
+  (check "ul color: no extras" '(#f #f) (map (lambda (r) (line-extra (grid-line (terminal-grid a) r))) '(0 1)))
   (check "ul color: per cell" (list (logior COLOR-RGB #xFF0000) (logior COLOR-RGB #xFF0000) #f)
          (map (lambda (c) (ul-at a 0 c)) '(0 2 3)))
-  (check "ul color: wide character and after" '(5 #f 5 #f) (map (lambda (c) (ul-at a 1 c)) '(0 1 2 3)))
+  (check "ul color: wide character and after" '(5 5 5 #f) (map (lambda (c) (ul-at a 1 c)) '(0 1 2 3)))
   (check "ul color: no extras without it" #f (line-extra (grid-line (terminal-grid b) 0))))
 
 ;; it goes with its cells: overwritten, erased, scrolled, reflowed

@@ -14,9 +14,10 @@ hovering with Ctrl underlines the whole link. What is left: keyboard hints
 
 ### Underline color (SGR 58/59) (done)
 
-Cells keep the color in the line's `extra` table, next to the hyperlink id,
-`draw-underline!` draws every style in it, and the terminfo entries
-advertise `Setulc`.
+Cells keep the color in the unused upper bits of their foreground field,
+so printing costs nothing extra and blank cells stay all zeros (the line's
+`extra` table made `parse/sgr` 40% slower). `draw-underline!` draws every
+style in it, and the terminfo entries advertise `Setulc`.
 
 ### Performance findings from the benchmarks
 
